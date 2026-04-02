@@ -17,7 +17,7 @@
  * Get your API key at: https://theclawbay.com
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 const THECLAWBAY_OPENAI_BASE_URL = "https://api.theclawbay.com/v1";
 const THECLAWBAY_ANTHROPIC_BASE_URL = "https://api.theclawbay.com/anthropic";
@@ -228,6 +228,35 @@ function formatQuotaDetails(label: string, window?: QuotaWindow): string {
 }
 
 /**
+ * Update quota status in the status line
+ */
+function updateQuotaStatus(ctx: ExtensionContext, quota: QuotaResponse) {
+	const theme = ctx.ui.theme;
+	const { fiveHour, weekly } = getQuotaWindows(quota);
+	const parts: string[] = [];
+
+	if (fiveHour) {
+		const five = formatPercent(fiveHour.percentUsed);
+		parts.push(theme.fg(five.color, `5h:${five.text}`));
+	}
+
+	if (weekly) {
+		const week = formatPercent(weekly.percentUsed);
+		parts.push(theme.fg(week.color, `w:${week.text}`));
+	}
+
+	if (parts.length > 0) {
+		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, parts.join(" "));
+	} else {
+		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, theme.fg("dim", "Quota: N/A"));
+	}
+}
+
+function clearQuotaStatus(ctx: ExtensionContext) {
+	ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, undefined);
+}
+
+/**
  * Register TheClawBay providers with pi coding agent
  */
 export default function (pi: ExtensionAPI) {
@@ -274,100 +303,66 @@ export default function (pi: ExtensionAPI) {
 		})),
 	});
 
-	const setQuotaUnavailableStatus = (ctx: any) => {
-		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, ctx.ui.theme.fg("dim", "Quota: unavailable"));
-	};
-
-	const refreshQuotaStatus = async (ctx: any, provider: string | undefined) => {
+	/**
+	 * Refresh quota status for the current model
+	 */
+	const refreshQuotaStatus = async (ctx: ExtensionContext, provider: string | undefined) => {
 		if (!isTheClawBayProvider(provider)) {
-			ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, undefined);
+			clearQuotaStatus(ctx);
 			return;
 		}
 
 		const currentApiKey = getApiKey();
 		if (!currentApiKey) {
-			setQuotaUnavailableStatus(ctx);
+			ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, ctx.ui.theme.fg("dim", "Quota: no key"));
 			return;
 		}
 
 		const quota = await fetchQuota(currentApiKey);
 		if (!quota) {
-			setQuotaUnavailableStatus(ctx);
+			ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, ctx.ui.theme.fg("dim", "Quota: unavailable"));
 			return;
 		}
 
-		updateQuotaStatus(ctx, quota, true);
+		updateQuotaStatus(ctx, quota);
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
-		await refreshQuotaStatus(ctx, ctx.model?.provider);
-	});
+	// Current provider tracking (updated via events)
+	let currentProvider: string | undefined;
 
+	// Update quota status when model is selected (covers initial load, switches, and restores)
 	pi.on("model_select", async (event, ctx) => {
-		await refreshQuotaStatus(ctx, event.model.provider);
+		currentProvider = event.model.provider;
+		await refreshQuotaStatus(ctx, currentProvider);
 	});
 
+	// Update quota after each turn (usage changes)
 	pi.on("turn_end", async (_event, ctx) => {
-		await refreshQuotaStatus(ctx, ctx.model?.provider);
+		if (isTheClawBayProvider(currentProvider)) {
+			await refreshQuotaStatus(ctx, currentProvider);
+		}
 	});
 
-	const showQuota = async (ctx: any) => {
-		const currentApiKey = getApiKey();
-		if (!currentApiKey) {
-			setQuotaUnavailableStatus(ctx);
-			ctx.ui.notify("THECLAWBAY_API_KEY is not set", "error");
-			return;
-		}
-
-		const quota = await fetchQuota(currentApiKey);
-		if (!quota) {
-			setQuotaUnavailableStatus(ctx);
-			ctx.ui.notify("Failed to fetch quota from TheClawBay", "error");
-			return;
-		}
-
-		updateQuotaStatus(ctx, quota, true);
-
-		const { fiveHour, weekly } = getQuotaWindows(quota);
-		ctx.ui.notify(`${formatQuotaDetails("5h", fiveHour)} | ${formatQuotaDetails("Week", weekly)}`, "info");
-	};
-
+	// Register single quota command
 	pi.registerCommand("quota", {
 		description: "Check TheClawBay quota usage",
 		handler: async (_args, ctx) => {
-			await showQuota(ctx);
+			const currentApiKey = getApiKey();
+			if (!currentApiKey) {
+				ctx.ui.notify("THECLAWBAY_API_KEY is not set", "error");
+				return;
+			}
+
+			const quota = await fetchQuota(currentApiKey);
+			if (!quota) {
+				ctx.ui.notify("Failed to fetch quota from TheClawBay", "error");
+				return;
+			}
+
+			updateQuotaStatus(ctx, quota);
+
+			const { fiveHour, weekly } = getQuotaWindows(quota);
+			ctx.ui.notify(`${formatQuotaDetails("5h", fiveHour)} | ${formatQuotaDetails("Week", weekly)}`, "info");
 		},
 	});
-
-	pi.registerCommand("quotas", {
-		description: "Check TheClawBay quota usage",
-		handler: async (_args, ctx) => {
-			await showQuota(ctx);
-		},
-	});
-}
-
-/**
- * Update quota status in the status line
- */
-function updateQuotaStatus(ctx: any, quota: QuotaResponse, force: boolean = false) {
-	const theme = ctx.ui.theme;
-	const { fiveHour, weekly } = getQuotaWindows(quota);
-	const parts: string[] = [];
-
-	if (fiveHour) {
-		const five = formatPercent(fiveHour.percentUsed);
-		parts.push(theme.fg(five.color, `5h:${five.text}`));
-	}
-
-	if (weekly) {
-		const week = formatPercent(weekly.percentUsed);
-		parts.push(theme.fg(week.color, `w:${week.text}`));
-	}
-
-	if (parts.length > 0) {
-		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, parts.join(" "));
-	} else if (force) {
-		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, theme.fg("dim", "Quota: N/A"));
-	}
 }
