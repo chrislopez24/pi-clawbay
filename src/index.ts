@@ -256,6 +256,13 @@ function clearQuotaStatus(ctx: ExtensionContext) {
 	ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, undefined);
 }
 
+function getProviderFromContext(
+	ctx: ExtensionContext,
+	fallbackProvider?: string
+): string | undefined {
+	return ctx.model?.provider ?? fallbackProvider;
+}
+
 /**
  * Register TheClawBay providers with pi coding agent
  */
@@ -330,14 +337,35 @@ export default function (pi: ExtensionAPI) {
 	// Current provider tracking (updated via events)
 	let currentProvider: string | undefined;
 
-	// Update quota status when model is selected (covers initial load, switches, and restores)
+	// Update quota status when model is selected (covers switches and restores)
 	pi.on("model_select", async (event, ctx) => {
 		currentProvider = event.model.provider;
 		await refreshQuotaStatus(ctx, currentProvider);
 	});
 
+	// Seed status on startup even if the current model was already restored before hooks run
+	pi.on("session_start", async (_event, ctx) => {
+		currentProvider = getProviderFromContext(ctx, currentProvider);
+		await refreshQuotaStatus(ctx, currentProvider);
+	});
+
+	// Keep the footer in sync when moving between sessions
+	pi.on("session_switch", async (_event, ctx) => {
+		currentProvider = getProviderFromContext(ctx, currentProvider);
+		await refreshQuotaStatus(ctx, currentProvider);
+	});
+
+	// Ensure status appears as soon as a turn starts, even if startup restore was silent
+	pi.on("turn_start", async (_event, ctx) => {
+		currentProvider = getProviderFromContext(ctx, currentProvider);
+		if (isTheClawBayProvider(currentProvider)) {
+			await refreshQuotaStatus(ctx, currentProvider);
+		}
+	});
+
 	// Update quota after each turn (usage changes)
 	pi.on("turn_end", async (_event, ctx) => {
+		currentProvider = getProviderFromContext(ctx, currentProvider);
 		if (isTheClawBayProvider(currentProvider)) {
 			await refreshQuotaStatus(ctx, currentProvider);
 		}
