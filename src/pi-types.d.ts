@@ -22,7 +22,7 @@ declare module "@mariozechner/pi-coding-agent" {
   export interface ExtensionContext {
     ui: ExtensionUIContext;
     sessionManager: SessionManager;
-    model?: { id: string };
+    model?: { id: string; provider: string };
   }
 
   export interface ExtensionUIContext {
@@ -114,6 +114,8 @@ declare module "@mariozechner/pi-coding-agent" {
   // Event types
   export interface SessionStartEvent {
     type: "session_start";
+    reason: "startup" | "reload" | "new" | "resume" | "fork";
+    previousSessionFile?: string;
   }
 
   export interface TurnStartEvent {
@@ -133,6 +135,6 @@ declare module "@mariozechner/pi-coding-agent" {
     type: "model_select";
     model: { provider: string; id: string };
     previousModel?: { provider: string; id: string };
-    source: "command" | "cycle" | "restore" | "select";
+    source: "set" | "cycle" | "restore";
   }
 }

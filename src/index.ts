@@ -24,6 +24,7 @@ const THECLAWBAY_ANTHROPIC_BASE_URL = "https://api.theclawbay.com/anthropic";
 const THECLAWBAY_QUOTA_URL = "https://theclawbay.com/api/codex-auth/v1/quota";
 
 const THECLAWBAY_PROVIDERS = ["theclawbay", "theclawbay-claude"];
+const THECLAWBAY_QUOTA_STATUS_KEY = "theclawbay-quota";
 
 /**
  * GPT and Codex models available through TheClawBay OpenAI-compatible endpoint
@@ -161,6 +162,14 @@ async function fetchQuota(apiKey: string): Promise<QuotaResponse | null> {
 	}
 }
 
+function getApiKey(): string | undefined {
+	return process.env.THECLAWBAY_API_KEY;
+}
+
+function isTheClawBayProvider(provider: string | undefined): boolean {
+	return provider !== undefined && THECLAWBAY_PROVIDERS.includes(provider);
+}
+
 function getQuotaWindows(quota: QuotaResponse): { fiveHour?: QuotaWindow; weekly?: QuotaWindow } {
 	return {
 		fiveHour: quota.usage?.fiveHour,
@@ -222,7 +231,7 @@ function formatQuotaDetails(label: string, window?: QuotaWindow): string {
  * Register TheClawBay providers with pi coding agent
  */
 export default function (pi: ExtensionAPI) {
-	const apiKey = process.env.THECLAWBAY_API_KEY;
+	const apiKey = getApiKey();
 
 	if (!apiKey) {
 		console.warn(
@@ -265,40 +274,54 @@ export default function (pi: ExtensionAPI) {
 		})),
 	});
 
-	if (!apiKey) {
-		return;
-	}
+	const setQuotaUnavailableStatus = (ctx: any) => {
+		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, ctx.ui.theme.fg("dim", "Quota: unavailable"));
+	};
 
-	let usingTheClawBay = false;
-
-	pi.on("model_select", async (event, ctx) => {
-		usingTheClawBay = THECLAWBAY_PROVIDERS.includes(event.model.provider);
-
-		if (!usingTheClawBay) {
-			ctx.ui.setStatus("theclawbay-quota", undefined);
+	const refreshQuotaStatus = async (ctx: any, provider: string | undefined) => {
+		if (!isTheClawBayProvider(provider)) {
+			ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, undefined);
 			return;
 		}
 
-		const quota = await fetchQuota(apiKey);
-		if (quota) {
-			updateQuotaStatus(ctx, quota, true);
+		const currentApiKey = getApiKey();
+		if (!currentApiKey) {
+			setQuotaUnavailableStatus(ctx);
+			return;
 		}
+
+		const quota = await fetchQuota(currentApiKey);
+		if (!quota) {
+			setQuotaUnavailableStatus(ctx);
+			return;
+		}
+
+		updateQuotaStatus(ctx, quota, true);
+	};
+
+	pi.on("session_start", async (_event, ctx) => {
+		await refreshQuotaStatus(ctx, ctx.model?.provider);
+	});
+
+	pi.on("model_select", async (event, ctx) => {
+		await refreshQuotaStatus(ctx, event.model.provider);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
-		if (!usingTheClawBay) {
-			return;
-		}
-
-		const quota = await fetchQuota(apiKey);
-		if (quota) {
-			updateQuotaStatus(ctx, quota, true);
-		}
+		await refreshQuotaStatus(ctx, ctx.model?.provider);
 	});
 
 	const showQuota = async (ctx: any) => {
-		const quota = await fetchQuota(apiKey);
+		const currentApiKey = getApiKey();
+		if (!currentApiKey) {
+			setQuotaUnavailableStatus(ctx);
+			ctx.ui.notify("THECLAWBAY_API_KEY is not set", "error");
+			return;
+		}
+
+		const quota = await fetchQuota(currentApiKey);
 		if (!quota) {
+			setQuotaUnavailableStatus(ctx);
 			ctx.ui.notify("Failed to fetch quota from TheClawBay", "error");
 			return;
 		}
@@ -343,8 +366,8 @@ function updateQuotaStatus(ctx: any, quota: QuotaResponse, force: boolean = fals
 	}
 
 	if (parts.length > 0) {
-		ctx.ui.setStatus("theclawbay-quota", parts.join(" "));
+		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, parts.join(" "));
 	} else if (force) {
-		ctx.ui.setStatus("theclawbay-quota", theme.fg("dim", "Quota: N/A"));
+		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, theme.fg("dim", "Quota: N/A"));
 	}
 }
