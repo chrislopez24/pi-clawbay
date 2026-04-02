@@ -52,6 +52,11 @@
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": ">=1.0.0"
+    "@mariozechner/pi-coding-agent": ">=0.64.0"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    }
   }
 }
