@@ -41,12 +41,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/chrislopez/pi-clawbay.git"
+    "url": "git+https://github.com/chrislopez24/pi-clawbay.git"
   },
   "bugs": {
-    "url": "https://github.com/chrislopez/pi-clawbay/issues"
+    "url": "https://github.com/chrislopez24/pi-clawbay/issues"
   },
-  "homepage": "https://github.com/chrislopez/pi-clawbay#readme",
+  "homepage": "https://github.com/chrislopez24/pi-clawbay#readme",
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.0.0"
