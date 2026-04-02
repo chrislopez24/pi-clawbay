@@ -11,20 +11,29 @@ A provider extension for [pi coding agent](https://github.com/badlogic/pi-mono) 
 
 ## Installation
 
-### Option 1: Load extension directly
+### Recommended: Install from npm
+
+```bash
+pi install npm:pi-clawbay@latest
+```
+
+This uses the published npm package and avoids npm's GitHub dependency path.
+
+Do not use:
+
+```bash
+pi install npm:chrislopez24/pi-clawbay
+```
+
+That form is treated as a GitHub install, not a registry package install, and it can leave broken global symlinks behind.
+
+### Local Development
 
 ```bash
 pi -e /path/to/pi-clawbay
 ```
 
-### Option 2: Install as dependency
-
-```bash
-cd your-project
-npm install /path/to/pi-clawbay
-```
-
-Then add to your `.pi/agent/AGENTS.md` or load via extension config.
+Use this only while actively developing the extension locally.
 
 ## Configuration
 
@@ -125,6 +134,14 @@ Common error codes:
 ```bash
 npm install
 npm run build
+npm pack --dry-run
+```
+
+## Publishing
+
+```bash
+npm version patch
+npm publish
 ```
 
 ## Resources

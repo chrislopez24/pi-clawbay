@@ -1,6 +1,6 @@
 {
   "name": "pi-clawbay",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "TheClawBay provider extension for Pi Coding Agent - access GPT-5, Codex, and Claude models",
   "type": "module",
   "main": "dist/index.js",
@@ -19,7 +19,8 @@
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc",
     "check": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepare": "npm run build",
+    "prepack": "npm run build"
   },
   "pi": {
     "extensions": [
