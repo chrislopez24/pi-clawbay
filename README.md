@@ -49,23 +49,23 @@ Get your API key from [TheClawBay Dashboard](https://theclawbay.com).
 
 ### Available Models
 
-#### GPT/Codex Models (`theclawbay/*`)
+Model IDs are discovered dynamically at extension load from:
 
-| Model ID | Name | Description |
-|----------|------|-------------|
-| `gpt-5.4` | GPT-5.4 | Frontier coding model with widest headroom |
-| `gpt-5.3-codex` | GPT-5.3 Codex | Strong daily-driver for heavier work |
-| `gpt-5.2-codex` | GPT-5.2 Codex | Stable compatibility for older flows |
-| `gpt-5.2` | GPT-5.2 | Balanced non-Codex option |
-| `gpt-5.1-codex-max` | GPT-5.1 Codex Max | Higher-throughput for longer sessions |
-| `gpt-5.1-codex-mini` | GPT-5.1 Codex Mini | Lower-cost for quick iterations |
+- `GET https://api.theclawbay.com/v1/models`
+- `GET https://api.theclawbay.com/anthropic/v1/models`
 
-#### Claude Models (`theclawbay-claude/*`)
+If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to a bundled default list so `/model` still works.
 
-| Model ID | Name | Description |
-|----------|------|-------------|
-| `claude-opus-4-6` | Claude Opus 4.6 | Most capable for complex tasks |
-| `claude-sonnet-4-6` | Claude Sonnet 4.6 | Near-Opus at lower cost |
+Last verified against the live APIs on `2026-04-03`:
+
+- OpenAI-compatible: `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`
+- Anthropic-compatible: `claude-haiku-4-5-20251001`, `claude-sonnet-4-6`, `claude-opus-4-6`
+
+### Model Limits
+
+- `gpt-5.4` is configured with a `1,050,000` token context window.
+- Current GPT-5/Codex variants default to `400,000` context and `128,000` max output tokens.
+- Claude models default to `200,000` context in this extension. Anthropic documents `1M` context for Opus 4.6 and Sonnet 4.6 behind a beta header, but this extension does not enable that beta automatically.
 
 ## Usage
 
@@ -86,8 +86,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 export default function (pi: ExtensionAPI) {
   // After loading this extension, models are available:
   // - theclawbay/gpt-5.4
-  // - theclawbay/gpt-5.3-codex
+  // - theclawbay/gpt-5.4-mini
   // - theclawbay-claude/claude-opus-4-6
+  // - theclawbay-claude/claude-haiku-4-5-20251001
   // - theclawbay-claude/claude-sonnet-4-6
 }
 ```

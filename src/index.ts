@@ -7,7 +7,6 @@
  * - `theclawbay-claude`: Anthropic-compatible endpoint for Claude models
  *
  * Features:
- * - Shows quota usage in status line (only when using TheClawBay models)
  * - /quota command to check detailed usage
  *
  * Usage:
@@ -17,106 +16,269 @@
  * Get your API key at: https://theclawbay.com
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ProviderModelConfig } from "@mariozechner/pi-coding-agent";
 
 const THECLAWBAY_OPENAI_BASE_URL = "https://api.theclawbay.com/v1";
 const THECLAWBAY_ANTHROPIC_BASE_URL = "https://api.theclawbay.com/anthropic";
 const THECLAWBAY_QUOTA_URL = "https://theclawbay.com/api/codex-auth/v1/quota";
+const THECLAWBAY_OPENAI_MODELS_URL = `${THECLAWBAY_OPENAI_BASE_URL}/models`;
+const THECLAWBAY_ANTHROPIC_MODELS_URL = `${THECLAWBAY_ANTHROPIC_BASE_URL}/v1/models`;
+const ANTHROPIC_VERSION_HEADER = "2023-06-01";
 
-const THECLAWBAY_PROVIDERS = ["theclawbay", "theclawbay-claude"];
-const THECLAWBAY_QUOTA_STATUS_KEY = "theclawbay-quota";
+const MODEL_INPUTS = ["text", "image"] as const;
+const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+const OPENAI_KNOWN_COSTS: Record<string, ProviderModelConfig["cost"]> = {
+	"gpt-5.4": { input: 2.5, output: 15.0, cacheRead: 0.25, cacheWrite: 2.5 },
+	"gpt-5.4-mini": { input: 1.25, output: 10.0, cacheRead: 0.125, cacheWrite: 1.25 },
+	"gpt-5.3-codex": { input: 1.75, output: 14.0, cacheRead: 0.175, cacheWrite: 1.75 },
+	"gpt-5.2-codex": { input: 1.75, output: 14.0, cacheRead: 0.175, cacheWrite: 1.75 },
+	"gpt-5.2": { input: 1.75, output: 14.0, cacheRead: 0.175, cacheWrite: 1.75 },
+	"gpt-5.1-codex-max": { input: 1.25, output: 10.0, cacheRead: 0.125, cacheWrite: 1.25 },
+	"gpt-5.1-codex-mini": { input: 0.25, output: 2.0, cacheRead: 0.025, cacheWrite: 0.25 },
+};
+const OPENAI_DEFAULT_CONTEXT_WINDOW = 400000;
+const OPENAI_FRONTIER_CONTEXT_WINDOW = 1050000;
+const OPENAI_DEFAULT_MAX_TOKENS = 128000;
+const ANTHROPIC_DEFAULT_CONTEXT_WINDOW = 200000;
+const ANTHROPIC_DEFAULT_MAX_TOKENS = 64000;
 
-/**
- * GPT and Codex models available through TheClawBay OpenAI-compatible endpoint
- */
-const OPENAI_MODELS = [
-	{
-		id: "gpt-5.4",
-		name: "GPT-5.4",
-		description: "Frontier coding model with the widest headroom",
-		reasoning: true,
-		input: ["text", "image"] as const,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
-	{
-		id: "gpt-5.3-codex",
-		name: "GPT-5.3 Codex",
-		description: "Strong daily-driver Codex model for heavier work",
-		reasoning: true,
-		input: ["text", "image"] as const,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
-	{
-		id: "gpt-5.2-codex",
-		name: "GPT-5.2 Codex",
-		description: "Stable compatibility option for older Codex flows",
-		reasoning: true,
-		input: ["text", "image"] as const,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
-	{
-		id: "gpt-5.2",
-		name: "GPT-5.2",
-		description: "Balanced GPT-5 path when you want a non-Codex option",
-		reasoning: true,
-		input: ["text", "image"] as const,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
-	{
-		id: "gpt-5.1-codex-max",
-		name: "GPT-5.1 Codex Max",
-		description: "Higher-throughput option for longer coding sessions",
-		reasoning: true,
-		input: ["text", "image"] as const,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
-	{
-		id: "gpt-5.1-codex-mini",
-		name: "GPT-5.1 Codex Mini",
-		description: "Lower-cost Codex path for quick iterations",
-		reasoning: true,
-		input: ["text", "image"] as const,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
+const FALLBACK_OPENAI_MODEL_IDS = [
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.3-codex",
+	"gpt-5.2-codex",
+	"gpt-5.2",
+	"gpt-5.1-codex-max",
+	"gpt-5.1-codex-mini",
 ];
 
-/**
- * Claude models available through TheClawBay Anthropic-compatible endpoint
- */
-const ANTHROPIC_MODELS = [
-	{
-		id: "claude-opus-4-6",
-		name: "Claude Opus 4.6",
-		description: "Anthropic's most capable model for complex tasks",
-		reasoning: true,
-		input: ["text", "image"] as const,
-		cost: { input: 5.0, output: 25.0, cacheRead: 0.5, cacheWrite: 6.25 },
-		contextWindow: 200000,
-		maxTokens: 32000,
-	},
-	{
-		id: "claude-sonnet-4-6",
-		name: "Claude Sonnet 4.6",
-		description: "Near-Opus intelligence at a fraction of the cost",
-		reasoning: true,
-		input: ["text", "image"] as const,
-		cost: { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 },
-		contextWindow: 200000,
-		maxTokens: 16384,
-	},
+const FALLBACK_ANTHROPIC_MODEL_IDS = [
+	"claude-opus-4-6",
+	"claude-sonnet-4-6",
+	"claude-haiku-4-5-20251001",
 ];
+
+interface OpenAIModelListResponse {
+	data?: Array<{
+		id?: string;
+	}>;
+}
+
+interface AnthropicModelListResponse {
+	data?: Array<{
+		id?: string;
+		display_name?: string;
+	}>;
+}
+
+function dedupeIds(ids: string[]): string[] {
+	const seen = new Set<string>();
+	const deduped: string[] = [];
+
+	for (const id of ids) {
+		if (!seen.has(id)) {
+			seen.add(id);
+			deduped.push(id);
+		}
+	}
+
+	return deduped;
+}
+
+function toTitleCase(value: string): string {
+	if (value.length === 0) {
+		return value;
+	}
+
+	return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatOpenAIModelName(id: string): string {
+	if (id.startsWith("gpt-")) {
+		const suffix = id
+			.slice(4)
+			.split("-")
+			.map((part) => (/^\d+(\.\d+)?$/.test(part) ? part : toTitleCase(part)))
+			.join(" ");
+		return `GPT-${suffix}`;
+	}
+
+	return id
+		.split("-")
+		.map((part) => (/^\d+(\.\d+)?$/.test(part) ? part.toUpperCase() : toTitleCase(part)))
+		.join(" ");
+}
+
+function formatClaudeModelName(id: string): string {
+	const parts = id.split("-");
+	if (parts.length < 4 || parts[0] !== "claude") {
+		return id
+			.split("-")
+			.map((part) => toTitleCase(part))
+			.join(" ");
+	}
+
+	const version = `${parts[2]}.${parts[3]}`;
+	const suffix = parts.slice(4).join(" ");
+	return suffix.length > 0
+		? `Claude ${toTitleCase(parts[1])} ${version} ${suffix}`
+		: `Claude ${toTitleCase(parts[1])} ${version}`;
+}
+
+function createModelConfig(
+	id: string,
+	name: string,
+	cost: ProviderModelConfig["cost"],
+	contextWindow: number,
+	maxTokens: number
+): ProviderModelConfig {
+	return {
+		id,
+		name,
+		reasoning: true,
+		input: [...MODEL_INPUTS],
+		cost: { ...cost },
+		contextWindow,
+		maxTokens,
+	};
+}
+
+function createOpenAIModel(id: string): ProviderModelConfig {
+	const cost = OPENAI_KNOWN_COSTS[id] ?? ZERO_COST;
+
+	if (id === "gpt-5.4") {
+		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_FRONTIER_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
+	}
+
+	if (id === "gpt-5.4-pro") {
+		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_FRONTIER_CONTEXT_WINDOW, 272000);
+	}
+
+	return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
+}
+
+function createAnthropicModel(id: string, displayName?: string): ProviderModelConfig {
+	const name = displayName?.trim() || formatClaudeModelName(id);
+
+	switch (id) {
+		case "claude-opus-4-6":
+			return createModelConfig(id, name, { input: 5.0, output: 25.0, cacheRead: 0.5, cacheWrite: 6.25 }, 200000, 128000);
+		case "claude-sonnet-4-6":
+			return createModelConfig(id, name, { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 }, 200000, 64000);
+		case "claude-haiku-4-5":
+		case "claude-haiku-4-5-20251001":
+			return createModelConfig(id, name, { input: 1.0, output: 5.0, cacheRead: 0.1, cacheWrite: 1.25 }, 200000, 64000);
+		default:
+			return createModelConfig(id, name, ZERO_COST, ANTHROPIC_DEFAULT_CONTEXT_WINDOW, ANTHROPIC_DEFAULT_MAX_TOKENS);
+	}
+}
+
+function buildFallbackOpenAIModels(): ProviderModelConfig[] {
+	return dedupeIds(FALLBACK_OPENAI_MODEL_IDS).map((id) => createOpenAIModel(id));
+}
+
+function buildFallbackAnthropicModels(): ProviderModelConfig[] {
+	return dedupeIds(FALLBACK_ANTHROPIC_MODEL_IDS).map((id) => createAnthropicModel(id));
+}
+
+function registerProviders(
+	pi: ExtensionAPI,
+	openaiModels: ProviderModelConfig[],
+	anthropicModels: ProviderModelConfig[]
+) {
+	pi.registerProvider("theclawbay", {
+		baseUrl: THECLAWBAY_OPENAI_BASE_URL,
+		apiKey: "THECLAWBAY_API_KEY",
+		api: "openai-responses",
+		authHeader: true,
+		models: openaiModels,
+	});
+
+	pi.registerProvider("theclawbay-claude", {
+		baseUrl: THECLAWBAY_ANTHROPIC_BASE_URL,
+		apiKey: "THECLAWBAY_API_KEY",
+		api: "anthropic-messages",
+		authHeader: true,
+		models: anthropicModels,
+	});
+}
+
+async function fetchOpenAIModels(apiKey: string): Promise<ProviderModelConfig[] | null> {
+	try {
+		const response = await fetch(THECLAWBAY_OPENAI_MODELS_URL, {
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+			},
+		});
+
+		if (!response.ok) {
+			return null;
+		}
+
+		const payload = (await response.json()) as OpenAIModelListResponse;
+		const ids = dedupeIds(
+			(payload.data ?? [])
+				.map((entry) => entry.id?.trim())
+				.filter((id): id is string => typeof id === "string" && id.length > 0 && !id.startsWith("claude-"))
+		);
+
+		return ids.length > 0 ? ids.map((id) => createOpenAIModel(id)) : null;
+	} catch {
+		return null;
+	}
+}
+
+async function fetchAnthropicModels(apiKey: string): Promise<ProviderModelConfig[] | null> {
+	try {
+		const response = await fetch(THECLAWBAY_ANTHROPIC_MODELS_URL, {
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				"anthropic-version": ANTHROPIC_VERSION_HEADER,
+			},
+		});
+
+		if (!response.ok) {
+			return null;
+		}
+
+		const payload = (await response.json()) as AnthropicModelListResponse;
+		const models = dedupeIds(
+			(payload.data ?? [])
+				.map((entry) => entry.id?.trim())
+				.filter((id): id is string => Boolean(id))
+		).map((id) => {
+			const match = (payload.data ?? []).find((entry) => entry.id?.trim() === id);
+			return createAnthropicModel(id, match?.display_name);
+		});
+
+		return models.length > 0 ? models : null;
+	} catch {
+		return null;
+	}
+}
+
+async function refreshProviderModels(pi: ExtensionAPI): Promise<void> {
+	const apiKey = getApiKey();
+	if (!apiKey) {
+		return;
+	}
+
+	const [openaiResult, anthropicResult] = await Promise.all([
+		fetchOpenAIModels(apiKey),
+		fetchAnthropicModels(apiKey),
+	]);
+
+	const openaiModels = openaiResult ?? buildFallbackOpenAIModels();
+	const anthropicModels = anthropicResult ?? buildFallbackAnthropicModels();
+
+	registerProviders(pi, openaiModels, anthropicModels);
+
+	if (openaiResult || anthropicResult) {
+		console.info(
+			`[theclawbay] Registered ${openaiModels.length} OpenAI-compatible models and ${anthropicModels.length} Anthropic-compatible models from live model discovery.`
+		);
+	}
+}
 
 interface QuotaWindow {
 	secondsUntilReset?: number;
@@ -164,10 +326,6 @@ async function fetchQuota(apiKey: string): Promise<QuotaResponse | null> {
 
 function getApiKey(): string | undefined {
 	return process.env.THECLAWBAY_API_KEY;
-}
-
-function isTheClawBayProvider(provider: string | undefined): boolean {
-	return provider !== undefined && THECLAWBAY_PROVIDERS.includes(provider);
 }
 
 function getQuotaWindows(quota: QuotaResponse): { fiveHour?: QuotaWindow; weekly?: QuotaWindow } {
@@ -228,42 +386,6 @@ function formatQuotaDetails(label: string, window?: QuotaWindow): string {
 }
 
 /**
- * Update quota status in the status line
- */
-function updateQuotaStatus(ctx: ExtensionContext, quota: QuotaResponse) {
-	const theme = ctx.ui.theme;
-	const { fiveHour, weekly } = getQuotaWindows(quota);
-	const parts: string[] = [];
-
-	if (fiveHour) {
-		const five = formatPercent(fiveHour.percentUsed);
-		parts.push(theme.fg(five.color, `5h:${five.text}`));
-	}
-
-	if (weekly) {
-		const week = formatPercent(weekly.percentUsed);
-		parts.push(theme.fg(week.color, `w:${week.text}`));
-	}
-
-	if (parts.length > 0) {
-		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, parts.join(" "));
-	} else {
-		ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, theme.fg("dim", "Quota: N/A"));
-	}
-}
-
-function clearQuotaStatus(ctx: ExtensionContext) {
-	ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, undefined);
-}
-
-function getProviderFromContext(
-	ctx: ExtensionContext,
-	fallbackProvider?: string
-): string | undefined {
-	return ctx.model?.provider ?? fallbackProvider;
-}
-
-/**
  * Register TheClawBay providers with pi coding agent
  */
 export default function (pi: ExtensionAPI) {
@@ -278,98 +400,8 @@ export default function (pi: ExtensionAPI) {
 		);
 	}
 
-	pi.registerProvider("theclawbay", {
-		baseUrl: THECLAWBAY_OPENAI_BASE_URL,
-		apiKey: "THECLAWBAY_API_KEY",
-		api: "openai-responses",
-		authHeader: true,
-		models: OPENAI_MODELS.map((m) => ({
-			id: m.id,
-			name: m.name,
-			reasoning: m.reasoning,
-			input: [...m.input],
-			cost: m.cost,
-			contextWindow: m.contextWindow,
-			maxTokens: m.maxTokens,
-		})),
-	});
-
-	pi.registerProvider("theclawbay-claude", {
-		baseUrl: THECLAWBAY_ANTHROPIC_BASE_URL,
-		apiKey: "THECLAWBAY_API_KEY",
-		api: "anthropic-messages",
-		authHeader: true,
-		models: ANTHROPIC_MODELS.map((m) => ({
-			id: m.id,
-			name: m.name,
-			reasoning: m.reasoning,
-			input: [...m.input],
-			cost: m.cost,
-			contextWindow: m.contextWindow,
-			maxTokens: m.maxTokens,
-		})),
-	});
-
-	/**
-	 * Refresh quota status for the current model
-	 */
-	const refreshQuotaStatus = async (ctx: ExtensionContext, provider: string | undefined) => {
-		if (!isTheClawBayProvider(provider)) {
-			clearQuotaStatus(ctx);
-			return;
-		}
-
-		const currentApiKey = getApiKey();
-		if (!currentApiKey) {
-			ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, ctx.ui.theme.fg("dim", "Quota: no key"));
-			return;
-		}
-
-		const quota = await fetchQuota(currentApiKey);
-		if (!quota) {
-			ctx.ui.setStatus(THECLAWBAY_QUOTA_STATUS_KEY, ctx.ui.theme.fg("dim", "Quota: unavailable"));
-			return;
-		}
-
-		updateQuotaStatus(ctx, quota);
-	};
-
-	// Current provider tracking (updated via events)
-	let currentProvider: string | undefined;
-
-	// Update quota status when model is selected (covers switches and restores)
-	pi.on("model_select", async (event, ctx) => {
-		currentProvider = event.model.provider;
-		await refreshQuotaStatus(ctx, currentProvider);
-	});
-
-	// Seed status on startup even if the current model was already restored before hooks run
-	pi.on("session_start", async (_event, ctx) => {
-		currentProvider = getProviderFromContext(ctx, currentProvider);
-		await refreshQuotaStatus(ctx, currentProvider);
-	});
-
-	// Keep the footer in sync when moving between sessions
-	pi.on("session_switch", async (_event, ctx) => {
-		currentProvider = getProviderFromContext(ctx, currentProvider);
-		await refreshQuotaStatus(ctx, currentProvider);
-	});
-
-	// Ensure status appears as soon as a turn starts, even if startup restore was silent
-	pi.on("turn_start", async (_event, ctx) => {
-		currentProvider = getProviderFromContext(ctx, currentProvider);
-		if (isTheClawBayProvider(currentProvider)) {
-			await refreshQuotaStatus(ctx, currentProvider);
-		}
-	});
-
-	// Update quota after each turn (usage changes)
-	pi.on("turn_end", async (_event, ctx) => {
-		currentProvider = getProviderFromContext(ctx, currentProvider);
-		if (isTheClawBayProvider(currentProvider)) {
-			await refreshQuotaStatus(ctx, currentProvider);
-		}
-	});
+	registerProviders(pi, buildFallbackOpenAIModels(), buildFallbackAnthropicModels());
+	void refreshProviderModels(pi);
 
 	// Register single quota command
 	pi.registerCommand("quota", {
@@ -386,8 +418,6 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("Failed to fetch quota from TheClawBay", "error");
 				return;
 			}
-
-			updateQuotaStatus(ctx, quota);
 
 			const { fiveHour, weekly } = getQuotaWindows(quota);
 			ctx.ui.notify(`${formatQuotaDetails("5h", fiveHour)} | ${formatQuotaDetails("Week", weekly)}`, "info");
