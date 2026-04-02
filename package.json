@@ -1,0 +1,57 @@
+{
+  "name": "pi-clawbay",
+  "version": "1.0.0",
+  "description": "TheClawBay provider extension for Pi Coding Agent - access GPT-5, Codex, and Claude models",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc",
+    "check": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "pi": {
+    "extensions": [
+      "dist/index.js"
+    ]
+  },
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "theclawbay",
+    "gpt-5",
+    "codex",
+    "claude",
+    "ai",
+    "llm",
+    "provider"
+  ],
+  "author": "Chris Lopez",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrislopez/pi-clawbay.git"
+  },
+  "bugs": {
+    "url": "https://github.com/chrislopez/pi-clawbay/issues"
+  },
+  "homepage": "https://github.com/chrislopez/pi-clawbay#readme",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=1.0.0"
+  }
+}
