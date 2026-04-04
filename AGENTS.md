@@ -79,9 +79,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
   pi.registerProvider("theclawbay", {
-    baseUrl: "https://api.theclawbay.com/v1",
+    baseUrl: "https://api.theclawbay.com/backend-api/codex",  // Pi appends /responses for the native Codex route
     apiKey: "THECLAWBAY_API_KEY",
-    api: "openai-responses",
+    api: "openai-codex-responses",       // Enables session_id header caching like Codex CLI
     models: [
       {
         id: "gpt-5.4",
@@ -103,9 +103,20 @@ The `api` field determines streaming implementation:
 
 | API | Use for |
 |-----|---------|
-| `openai-responses` | OpenAI Responses API (recommended) |
+| `openai-codex-responses` | **TheClawBay OpenAI endpoint** - sends `session_id` header for prompt caching |
+| `openai-responses` | OpenAI Responses API (no session_id header) |
 | `openai-completions` | OpenAI Chat Completions |
 | `anthropic-messages` | Anthropic Claude API |
+
+**Why `openai-codex-responses` for TheClawBay?**
+
+The `openai-codex-responses` API type enables prompt caching via the `session_id` header,
+which is the same mechanism used by Codex CLI. This significantly reduces token usage
+by allowing the backend to cache the system prompt and conversation context.
+
+- **Endpoint**: `https://api.theclawbay.com/backend-api/codex/responses` (provider appends `/responses`)
+- **Headers**: `session_id: <uuid>` for cache key
+- **Body**: `prompt_cache_key: <sessionId>` for cache lookup
 
 ### Model Definition Reference
 
@@ -156,6 +167,7 @@ interface ProviderConfig {
 - [x] Register TheClawBay provider with OpenAI-compatible config (`theclawbay`)
 - [x] Register Claude models via Anthropic-compatible endpoint (`theclawbay-claude`)
 - [x] Document configuration options
+- [x] **Use `openai-codex-responses` API for prompt caching** (sends `session_id` header)
 
 **Future improvements:**
 - [ ] Dynamic model discovery from `/models` endpoint

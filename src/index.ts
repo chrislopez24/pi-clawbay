@@ -18,10 +18,11 @@
 
 import type { ExtensionAPI, ExtensionContext, ProviderModelConfig } from "@mariozechner/pi-coding-agent";
 
-const THECLAWBAY_OPENAI_BASE_URL = "https://api.theclawbay.com/v1";
+const THECLAWBAY_OPENAI_DISCOVERY_BASE_URL = "https://api.theclawbay.com/v1";
+const THECLAWBAY_CODEX_BASE_URL = "https://api.theclawbay.com/backend-api/codex";
 const THECLAWBAY_ANTHROPIC_BASE_URL = "https://api.theclawbay.com/anthropic";
 const THECLAWBAY_QUOTA_URL = "https://theclawbay.com/api/codex-auth/v1/quota";
-const THECLAWBAY_OPENAI_MODELS_URL = `${THECLAWBAY_OPENAI_BASE_URL}/models`;
+const THECLAWBAY_OPENAI_MODELS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/models`;
 const THECLAWBAY_ANTHROPIC_MODELS_URL = `${THECLAWBAY_ANTHROPIC_BASE_URL}/v1/models`;
 const ANTHROPIC_VERSION_HEADER = "2023-06-01";
 
@@ -187,9 +188,9 @@ function registerProviders(
 	anthropicModels: ProviderModelConfig[]
 ) {
 	pi.registerProvider("theclawbay", {
-		baseUrl: THECLAWBAY_OPENAI_BASE_URL,
+		baseUrl: THECLAWBAY_CODEX_BASE_URL,
 		apiKey: "THECLAWBAY_API_KEY",
-		api: "openai-responses",
+		api: "openai-codex-responses",
 		authHeader: true,
 		models: openaiModels,
 	});

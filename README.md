@@ -4,7 +4,7 @@ A provider extension for [pi coding agent](https://github.com/badlogic/pi-mono) 
 
 ## Features
 
-- **GPT-5 & Codex Models** - Access via OpenAI-compatible Responses API
+- **GPT-5 & Codex Models** - Access via Codex Responses API with session-based prompt cache
 - **Claude Models** - Access via Anthropic-compatible Messages API
 - **High Usage Headroom** - More capacity than standard subscriptions
 - **Simple Setup** - Single API key for all models
@@ -56,6 +56,12 @@ Model IDs are discovered dynamically at extension load from:
 
 If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to a bundled default list so `/model` still works.
 
+Requests for `theclawbay/*` models are sent through TheClawBay's native Codex route:
+
+- `https://api.theclawbay.com/backend-api/codex`
+
+This is intentional. Pi's `openai-codex-responses` transport sends `session_id` and `prompt_cache_key`, which enables TheClawBay/Codex-style prompt caching. Using the generic `openai-responses` transport against `/v1` does not provide the same cache behavior.
+
 Last verified against the live APIs on `2026-04-03`:
 
 - OpenAI-compatible: `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`
@@ -66,6 +72,27 @@ Last verified against the live APIs on `2026-04-03`:
 - `gpt-5.4` is configured with a `1,050,000` token context window.
 - Current GPT-5/Codex variants default to `400,000` context and `128,000` max output tokens.
 - Claude models default to `200,000` context in this extension. Anthropic documents `1M` context for Opus 4.6 and Sonnet 4.6 behind a beta header, but this extension does not enable that beta automatically.
+
+### Anthropic Reasoning Behavior In Pi
+
+This extension does not set Anthropic `thinking` or `budget_tokens` itself. It only registers Claude models with `api: "anthropic-messages"` and `reasoning: true`. Pi Coding Agent handles the request mapping at runtime.
+
+With current `pi-mono` releases:
+
+- `claude-sonnet-4-6` and `claude-opus-4-6` use adaptive thinking automatically.
+- `claude-haiku-4-5-20251001` uses budget-based thinking automatically.
+- Default budget-based thinking levels in Pi map to:
+  - `minimal`: `1024`
+  - `low`: `2048`
+  - `medium`: `8192`
+  - `high`: `16384`
+
+Anthropic does not publish canonical token budgets for "low", "medium", and "high" on budget-based models. Their guidance is to start at the minimum `1024` tokens and increase incrementally for your workload.
+
+This means:
+
+- Pi Coding Agent works correctly with this extension as long as your Pi version includes Anthropic adaptive-thinking support for Claude 4.6 models.
+- OpenCode must be configured separately; it does not inherit Pi's Anthropic thinking defaults.
 
 ## Usage
 
@@ -99,7 +126,7 @@ export default function (pi: ExtensionAPI) {
 
 | Provider | Base URL | API Type |
 |----------|----------|----------|
-| `theclawbay` | `https://api.theclawbay.com/v1` | OpenAI Responses |
+| `theclawbay` | `https://api.theclawbay.com/backend-api/codex` | OpenAI Codex Responses |
 | `theclawbay-claude` | `https://api.theclawbay.com/anthropic` | Anthropic Messages |
 
 ### Authentication
