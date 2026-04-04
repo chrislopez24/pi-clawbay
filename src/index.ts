@@ -8,6 +8,8 @@
  *
  * Features:
  * - /quota command to check detailed usage
+ * - /cachehit command to inspect latest cache hit rate
+ * - custom Codex-style transport without JWT account-id extraction
  *
  * Usage:
  *   pi -e ./pi-clawbay
@@ -16,7 +18,16 @@
  * Get your API key at: https://theclawbay.com
  */
 
-import type { ExtensionAPI, ExtensionContext, ProviderModelConfig } from "@mariozechner/pi-coding-agent";
+import {
+	streamSimpleOpenAIResponses,
+	type Api,
+	type AssistantMessage,
+	type AssistantMessageEventStream,
+	type Context,
+	type Model,
+	type SimpleStreamOptions,
+} from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ProviderModelConfig } from "@mariozechner/pi-coding-agent";
 
 const THECLAWBAY_OPENAI_DISCOVERY_BASE_URL = "https://api.theclawbay.com/v1";
 const THECLAWBAY_CODEX_BASE_URL = "https://api.theclawbay.com/backend-api/codex";
@@ -24,6 +35,8 @@ const THECLAWBAY_ANTHROPIC_BASE_URL = "https://api.theclawbay.com/anthropic";
 const THECLAWBAY_QUOTA_URL = "https://theclawbay.com/api/codex-auth/v1/quota";
 const THECLAWBAY_OPENAI_MODELS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/models`;
 const THECLAWBAY_ANTHROPIC_MODELS_URL = `${THECLAWBAY_ANTHROPIC_BASE_URL}/v1/models`;
+const THECLAWBAY_CODEX_API = "theclawbay-codex-responses";
+const THECLAWBAY_CHATGPT_ACCOUNT_ID = "theclawbay";
 const ANTHROPIC_VERSION_HEADER = "2023-06-01";
 
 const MODEL_INPUTS = ["text", "image"] as const;
@@ -70,6 +83,26 @@ interface AnthropicModelListResponse {
 		id?: string;
 		display_name?: string;
 	}>;
+}
+
+interface QuotaWindow {
+	secondsUntilReset?: number;
+	requestCount?: number;
+	estimatedCostUsdUsed?: number | null;
+	costUsdLimit?: number | null;
+	percentUsed: number;
+	limitReached?: boolean;
+}
+
+interface QuotaResponse {
+	usageLimitPresentation?: string;
+	usage?: {
+		fiveHour?: QuotaWindow;
+		weekly?: QuotaWindow;
+	};
+	fiveHourLimitReached?: boolean;
+	weeklyLimitReached?: boolean;
+	anyLimitReached?: boolean;
 }
 
 function dedupeIds(ids: string[]): string[] {
@@ -182,6 +215,69 @@ function buildFallbackAnthropicModels(): ProviderModelConfig[] {
 	return dedupeIds(FALLBACK_ANTHROPIC_MODEL_IDS).map((id) => createAnthropicModel(id));
 }
 
+function buildTheClawBayHeaders(options?: SimpleStreamOptions): Record<string, string> {
+	return {
+		...(options?.headers ?? {}),
+		"chatgpt-account-id": THECLAWBAY_CHATGPT_ACCOUNT_ID,
+		originator: "pi",
+		"OpenAI-Beta": "responses=experimental",
+		...(options?.sessionId ? { session_id: options.sessionId } : {}),
+	};
+}
+
+function buildTheClawBayPayload(payload: unknown, context: Context): unknown {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+		return payload;
+	}
+
+	const source = payload as Record<string, unknown>;
+	const include = Array.isArray(source.include)
+		? source.include.filter((item): item is string => typeof item === "string")
+		: [];
+	const input = Array.isArray(source.input)
+		? source.input.filter((item) => {
+				if (!item || typeof item !== "object") {
+					return true;
+				}
+				const role = (item as { role?: unknown }).role;
+				return role !== "developer" && role !== "system";
+			})
+		: source.input;
+
+	return {
+		...source,
+		instructions: context.systemPrompt,
+		input,
+		include: dedupeIds([...include, "reasoning.encrypted_content"]),
+		text: { verbosity: "medium" },
+		tool_choice: "auto",
+		parallel_tool_calls: true,
+		store: false,
+	};
+}
+
+function streamSimpleTheClawBayCodexResponses(
+	model: unknown,
+	context: unknown,
+	options?: unknown
+): AssistantMessageEventStream {
+	const typedModel = model as Model<"openai-responses">;
+	const typedContext = context as Context;
+	const typedOptions = options as SimpleStreamOptions | undefined;
+	const originalOnPayload = typedOptions?.onPayload;
+	const headers = buildTheClawBayHeaders(typedOptions);
+
+	return streamSimpleOpenAIResponses(typedModel, typedContext, {
+		...typedOptions,
+		headers,
+		onPayload: async (payload, streamModel) => {
+			const transformedPayload = buildTheClawBayPayload(payload, typedContext);
+			const nextPayload = await originalOnPayload?.(transformedPayload, streamModel);
+			return nextPayload === undefined ? transformedPayload : nextPayload;
+		},
+	});
+}
+
 function registerProviders(
 	pi: ExtensionAPI,
 	openaiModels: ProviderModelConfig[],
@@ -190,8 +286,8 @@ function registerProviders(
 	pi.registerProvider("theclawbay", {
 		baseUrl: THECLAWBAY_CODEX_BASE_URL,
 		apiKey: "THECLAWBAY_API_KEY",
-		api: "openai-codex-responses",
-		authHeader: true,
+		api: THECLAWBAY_CODEX_API,
+		streamSimple: streamSimpleTheClawBayCodexResponses,
 		models: openaiModels,
 	});
 
@@ -281,32 +377,6 @@ async function refreshProviderModels(pi: ExtensionAPI): Promise<void> {
 	}
 }
 
-interface QuotaWindow {
-	secondsUntilReset?: number;
-	requestCount?: number;
-	estimatedCostUsdUsed?: number | null;
-	costUsdLimit?: number | null;
-	percentUsed: number;
-	limitReached?: boolean;
-}
-
-/**
- * Quota response from TheClawBay API
- */
-interface QuotaResponse {
-	usageLimitPresentation?: string;
-	usage?: {
-		fiveHour?: QuotaWindow;
-		weekly?: QuotaWindow;
-	};
-	fiveHourLimitReached?: boolean;
-	weeklyLimitReached?: boolean;
-	anyLimitReached?: boolean;
-}
-
-/**
- * Fetch quota information from TheClawBay API
- */
 async function fetchQuota(apiKey: string): Promise<QuotaResponse | null> {
 	try {
 		const response = await fetch(THECLAWBAY_QUOTA_URL, {
@@ -336,9 +406,6 @@ function getQuotaWindows(quota: QuotaResponse): { fiveHour?: QuotaWindow; weekly
 	};
 }
 
-/**
- * Format percentage with color based on usage level
- */
 function formatPercent(percent: number): { text: string; color: "dim" | "warning" | "error" } {
 	const digits = percent >= 10 ? 0 : percent >= 1 ? 1 : percent >= 0.1 ? 2 : 3;
 
@@ -386,9 +453,24 @@ function formatQuotaDetails(label: string, window?: QuotaWindow): string {
 	return `${label}: ${usage} • ${window.requestCount ?? 0} req • resets ${formatDuration(window.secondsUntilReset)}`;
 }
 
-/**
- * Register TheClawBay providers with pi coding agent
- */
+function computeCacheHitRate(message: AssistantMessage): number | null {
+	const totalPromptTokens = message.usage.input + message.usage.cacheRead;
+	if (totalPromptTokens <= 0) {
+		return null;
+	}
+
+	return (message.usage.cacheRead / totalPromptTokens) * 100;
+}
+
+function formatCacheHitRate(message: AssistantMessage): string {
+	const rate = computeCacheHitRate(message);
+	if (rate === null) {
+		return "n/a";
+	}
+
+	return `${rate.toFixed(rate >= 10 ? 0 : 1)}%`;
+}
+
 export default function (pi: ExtensionAPI) {
 	const apiKey = getApiKey();
 
@@ -404,7 +486,6 @@ export default function (pi: ExtensionAPI) {
 	registerProviders(pi, buildFallbackOpenAIModels(), buildFallbackAnthropicModels());
 	void refreshProviderModels(pi);
 
-	// Register single quota command
 	pi.registerCommand("quota", {
 		description: "Check TheClawBay quota usage",
 		handler: async (_args, ctx) => {
@@ -422,6 +503,33 @@ export default function (pi: ExtensionAPI) {
 
 			const { fiveHour, weekly } = getQuotaWindows(quota);
 			ctx.ui.notify(`${formatQuotaDetails("5h", fiveHour)} | ${formatQuotaDetails("Week", weekly)}`, "info");
+		},
+	});
+
+	pi.registerCommand("cachehit", {
+		description: "Show cache hit rate for the latest TheClawBay response",
+		handler: async (_args, ctx) => {
+			const branch = ctx.sessionManager.getBranch() as Array<{ type: string; message?: unknown }>;
+
+			for (let i = branch.length - 1; i >= 0; i--) {
+				const entry = branch[i];
+				if (entry.type !== "message") {
+					continue;
+				}
+
+				const message = entry.message as AssistantMessage | undefined;
+				if (!message || message.role !== "assistant" || message.provider !== "theclawbay") {
+					continue;
+				}
+
+				ctx.ui.notify(
+					`Cache hit ${formatCacheHitRate(message)} • R${message.usage.cacheRead} / I${message.usage.input} • ${message.model}`,
+					"info"
+				);
+				return;
+			}
+
+			ctx.ui.notify("No TheClawBay assistant response found in this session yet", "warning");
 		},
 	});
 }

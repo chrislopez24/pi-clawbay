@@ -42,8 +42,9 @@ declare module "@mariozechner/pi-coding-agent" {
   export interface ProviderConfig {
     baseUrl?: string;
     apiKey?: string;
-    api?: "openai-responses" | "openai-completions" | "openai-codex-responses" | "anthropic-messages";
+    api?: string;
     authHeader?: boolean;
+    streamSimple?: (model: unknown, context: unknown, options?: unknown) => unknown;
     models?: ProviderModelConfig[];
   }
 

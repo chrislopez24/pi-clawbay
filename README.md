@@ -60,7 +60,14 @@ Requests for `theclawbay/*` models are sent through TheClawBay's native Codex ro
 
 - `https://api.theclawbay.com/backend-api/codex`
 
-This is intentional. Pi's `openai-codex-responses` transport sends `session_id` and `prompt_cache_key`, which enables TheClawBay/Codex-style prompt caching. Using the generic `openai-responses` transport against `/v1` does not provide the same cache behavior.
+This extension uses a custom Responses transport for that route. It sends:
+
+- `Authorization: Bearer $THECLAWBAY_API_KEY`
+- `chatgpt-account-id: theclawbay`
+- `session_id` when Pi provides a session id
+- `prompt_cache_key` in the request body
+
+This avoids Pi's built-in `openai-codex-responses` JWT parsing path, which expects a ChatGPT/Codex-style token and can fail with `Failed to extract accountId from token` when given a normal TheClawBay API key.
 
 Last verified against the live APIs on `2026-04-03`:
 
@@ -145,6 +152,20 @@ Check your current usage:
 curl "https://theclawbay.com/api/codex-auth/v1/quota" \
   -H "Authorization: Bearer $THECLAWBAY_API_KEY"
 ```
+
+### Cache Hit Inspection
+
+After a TheClawBay response in Pi, you can inspect the latest prompt-cache hit rate with:
+
+```text
+/cachehit
+```
+
+It reports:
+
+- `R` = cached prompt tokens read
+- `I` = non-cached prompt input tokens
+- `cache hit % = R / (R + I)`
 
 ## Error Handling
 
