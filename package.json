@@ -1,7 +1,7 @@
 {
   "name": "pi-clawbay",
-  "version": "0.0.9",
-  "description": "TheClawBay provider extension for Pi Coding Agent - access GPT-5, Codex, and Claude models",
+  "version": "0.0.10",
+  "description": "TheClawBay provider extension for Pi Coding Agent - access GPT-5 and Codex models",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -33,7 +33,6 @@
     "theclawbay",
     "gpt-5",
     "codex",
-    "claude",
     "ai",
     "llm",
     "provider"

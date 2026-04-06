@@ -7,9 +7,13 @@ dist/
 # IDE
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
+
+# Local agent files
+AGENTS.md
 
 # OS
 .DS_Store

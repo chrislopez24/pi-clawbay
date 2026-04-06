@@ -1,13 +1,14 @@
 # TheClawBay Provider for Pi Coding Agent
 
-A provider extension for [pi coding agent](https://github.com/badlogic/pi-mono) that enables access to GPT-5, Codex, and Claude models through [TheClawBay](https://theclawbay.com) API.
+A provider extension for [pi coding agent](https://github.com/badlogic/pi-mono) that enables access to GPT-5 and Codex models through [TheClawBay](https://theclawbay.com) API.
 
 ## Features
 
 - **GPT-5 & Codex Models** - Access via Codex Responses API with session-based prompt cache
-- **Claude Models** - Access via Anthropic-compatible Messages API
+- **Single Provider** - Only `theclawbay` is registered
+- **GPT-5.4 Split Options** - `gpt-5.4` and `gpt-5.4[1m]` for clearer cost/context choice
 - **High Usage Headroom** - More capacity than standard subscriptions
-- **Simple Setup** - Single API key for all models
+- **Simple Setup** - Single API key
 
 ## Installation
 
@@ -52,7 +53,6 @@ Get your API key from [TheClawBay Dashboard](https://theclawbay.com).
 Model IDs are discovered dynamically at extension load from:
 
 - `GET https://api.theclawbay.com/v1/models`
-- `GET https://api.theclawbay.com/anthropic/v1/models`
 
 If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to a bundled default list so `/model` still works.
 
@@ -69,37 +69,48 @@ This extension uses a custom Responses transport for that route. It sends:
 
 This avoids Pi's built-in `openai-codex-responses` JWT parsing path, which expects a ChatGPT/Codex-style token and can fail with `Failed to extract accountId from token` when given a normal TheClawBay API key.
 
-Last verified against the live APIs on `2026-04-03`:
+Based on the live docs at `https://theclawbay.com/docs`:
 
-- OpenAI-compatible: `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`
-- Anthropic-compatible: `claude-haiku-4-5-20251001`, `claude-sonnet-4-6`, `claude-opus-4-6`
+- OpenAI-compatible apps use `https://api.theclawbay.com/v1`
+- Native Codex config uses `https://api.theclawbay.com/backend-api/codex`
+- The docs recommend calling `/models` first and selecting an available model dynamically
+
+### GPT-5.4 Variants In This Extension
+
+The live TheClawBay docs expose `gpt-5.4` as the upstream model. This extension presents it in Pi as two selectable entries:
+
+- `theclawbay/gpt-5.4` → standard variant, capped to `272k` context in Pi
+- `theclawbay/gpt-5.4[1m]` → long-context variant, configured to `1,050,000`
+
+Internally:
+
+- `gpt-5.4` stays as-is
+- `gpt-5.4[1m]` is remapped to upstream `gpt-5.4` before the request is sent
+
+Why split it?
+
+- `gpt-5.4` is the cheaper/default option
+- `gpt-5.4[1m]` gives explicit access to long context
+- both end up using the same official upstream model id from TheClawBay
 
 ### Model Limits
 
-- `gpt-5.4` is configured with a `1,050,000` token context window.
-- Current GPT-5/Codex variants default to `400,000` context and `128,000` max output tokens.
-- Claude models default to `200,000` context in this extension. Anthropic documents `1M` context for Opus 4.6 and Sonnet 4.6 behind a beta header, but this extension does not enable that beta automatically.
+- `gpt-5.4` is configured with a `272,000` token context window.
+- `gpt-5.4[1m]` is configured with a `1,050,000` token context window.
+- Current non-5.4 GPT-5/Codex variants default to `400,000` context and `128,000` max output tokens.
 
-### Anthropic Reasoning Behavior In Pi
+### Example Model List
 
-This extension does not set Anthropic `thinking` or `budget_tokens` itself. It only registers Claude models with `api: "anthropic-messages"` and `reasoning: true`. Pi Coding Agent handles the request mapping at runtime.
+Current fallback list in this package:
 
-With current `pi-mono` releases:
-
-- `claude-sonnet-4-6` and `claude-opus-4-6` use adaptive thinking automatically.
-- `claude-haiku-4-5-20251001` uses budget-based thinking automatically.
-- Default budget-based thinking levels in Pi map to:
-  - `minimal`: `1024`
-  - `low`: `2048`
-  - `medium`: `8192`
-  - `high`: `16384`
-
-Anthropic does not publish canonical token budgets for "low", "medium", and "high" on budget-based models. Their guidance is to start at the minimum `1024` tokens and increase incrementally for your workload.
-
-This means:
-
-- Pi Coding Agent works correctly with this extension as long as your Pi version includes Anthropic adaptive-thinking support for Claude 4.6 models.
-- OpenCode must be configured separately; it does not inherit Pi's Anthropic thinking defaults.
+- `gpt-5.4`
+- `gpt-5.4[1m]`
+- `gpt-5.4-mini`
+- `gpt-5.3-codex`
+- `gpt-5.2-codex`
+- `gpt-5.2`
+- `gpt-5.1-codex-max`
+- `gpt-5.1-codex-mini`
 
 ## Usage
 
@@ -107,10 +118,20 @@ This means:
 
 Use `/model` command in pi:
 
-```
+```text
 /model theclawbay/gpt-5.4
-/model theclawbay-claude/claude-sonnet-4-6
+/model theclawbay/gpt-5.4[1m]
 ```
+
+### Commands
+
+This extension currently registers:
+
+```text
+/quota
+```
+
+`/cachehit` was removed.
 
 ### Programmatic Usage
 
@@ -120,10 +141,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 export default function (pi: ExtensionAPI) {
   // After loading this extension, models are available:
   // - theclawbay/gpt-5.4
+  // - theclawbay/gpt-5.4[1m]
   // - theclawbay/gpt-5.4-mini
-  // - theclawbay-claude/claude-opus-4-6
-  // - theclawbay-claude/claude-haiku-4-5-20251001
-  // - theclawbay-claude/claude-sonnet-4-6
+  // - theclawbay/gpt-5.3-codex
 }
 ```
 
@@ -134,13 +154,12 @@ export default function (pi: ExtensionAPI) {
 | Provider | Base URL | API Type |
 |----------|----------|----------|
 | `theclawbay` | `https://api.theclawbay.com/backend-api/codex` | OpenAI Codex Responses |
-| `theclawbay-claude` | `https://api.theclawbay.com/anthropic` | Anthropic Messages |
 
 ### Authentication
 
 All requests use Bearer token authentication:
 
-```
+```text
 Authorization: Bearer THECLAWBAY_API_KEY
 ```
 
@@ -152,20 +171,6 @@ Check your current usage:
 curl "https://theclawbay.com/api/codex-auth/v1/quota" \
   -H "Authorization: Bearer $THECLAWBAY_API_KEY"
 ```
-
-### Cache Hit Inspection
-
-After a TheClawBay response in Pi, you can inspect the latest prompt-cache hit rate with:
-
-```text
-/cachehit
-```
-
-It reports:
-
-- `R` = cached prompt tokens read
-- `I` = non-cached prompt input tokens
-- `cache hit % = R / (R + I)`
 
 ## Error Handling
 
