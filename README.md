@@ -54,7 +54,7 @@ Model IDs are discovered dynamically at extension load from:
 
 - `GET https://api.theclawbay.com/v1/models`
 
-If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to a bundled default list so `/model` still works.
+If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to the last successful discovery cache, then to a bundled default list so `/model` still works on startup. Live discovery refreshes the cache in the background after the provider has been registered.
 
 Requests for `theclawbay/*` models are sent through TheClawBay's native Codex route:
 
@@ -103,6 +103,7 @@ Why split it?
 
 Current fallback list in this package:
 
+- `gpt-5.5`
 - `gpt-5.4`
 - `gpt-5.4[1m]`
 - `gpt-5.4-mini`
@@ -119,6 +120,7 @@ Current fallback list in this package:
 Use `/model` command in pi:
 
 ```text
+/model theclawbay/gpt-5.5
 /model theclawbay/gpt-5.4
 /model theclawbay/gpt-5.4[1m]
 ```
@@ -140,6 +142,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
   // After loading this extension, models are available:
+  // - theclawbay/gpt-5.5
   // - theclawbay/gpt-5.4
   // - theclawbay/gpt-5.4[1m]
   // - theclawbay/gpt-5.4-mini
