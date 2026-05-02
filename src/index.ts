@@ -55,7 +55,7 @@ const OPENAI_KNOWN_COSTS: Record<string, ProviderModelConfig["cost"]> = {
 	"gpt-5.1-codex-max": { input: 1.25, output: 10.0, cacheRead: 0.125, cacheWrite: 1.25 },
 	"gpt-5.1-codex-mini": { input: 0.25, output: 2.0, cacheRead: 0.025, cacheWrite: 0.25 },
 };
-const OPENAI_DEFAULT_CONTEXT_WINDOW = 400000;
+const OPENAI_DEFAULT_CONTEXT_WINDOW = 258000;
 const OPENAI_272K_CONTEXT_WINDOW = 272000;
 const OPENAI_FRONTIER_CONTEXT_WINDOW = 1050000;
 const OPENAI_DEFAULT_MAX_TOKENS = 128000;

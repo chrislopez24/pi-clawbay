@@ -42,7 +42,9 @@ try {
   const firstResult = extension(createPi(firstRegistrations));
   assert.equal(firstResult, undefined, 'extension factory should register synchronously');
   assert.equal(firstRegistrations.length, 1, 'provider should register immediately before live discovery resolves');
-  assert.ok(firstRegistrations[0].config.models.map((model) => model.id).includes('gpt-5.5'));
+  const fallbackGpt55 = firstRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5');
+  assert.ok(fallbackGpt55, 'fallback models should include gpt-5.5');
+  assert.equal(fallbackGpt55.contextWindow, 258000, 'gpt-5.5 should use the default 258k context window');
 
   await waitForRefresh();
   assert.equal(firstRegistrations.length, 2, 'live refresh should re-register after discovery');
