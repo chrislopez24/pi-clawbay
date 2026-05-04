@@ -451,17 +451,16 @@ function formatDuration(seconds?: number): string {
 	}
 
 	const totalSeconds = Math.max(0, Math.floor(seconds));
-	const hours = Math.floor(totalSeconds / 3600);
-	const minutes = Math.floor((totalSeconds % 3600) / 60);
-	const secs = totalSeconds % 60;
+	const totalMinutes = Math.floor(totalSeconds / 60);
+	const days = Math.floor(totalMinutes / 1440);
+	const hours = Math.floor((totalMinutes % 1440) / 60);
+	const minutes = totalMinutes % 60;
+	const time = `${hours}h ${minutes}m`;
 
-	if (hours > 0) {
-		return `${hours}h ${minutes}m`;
+	if (days > 0) {
+		return `${days}d ${time}`;
 	}
-	if (minutes > 0) {
-		return `${minutes}m ${secs}s`;
-	}
-	return `${secs}s`;
+	return time;
 }
 
 function formatQuotaDetails(label: string, window?: QuotaWindow): string {

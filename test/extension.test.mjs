@@ -10,12 +10,14 @@ const originalCacheDir = process.env.PI_CLAWBAY_CACHE_DIR;
 const originalFetch = globalThis.fetch;
 process.env.PI_CLAWBAY_CACHE_DIR = cacheDir;
 
-function createPi(registrations) {
+function createPi(registrations, commands = {}) {
   return {
     registerProvider(name, config) {
       registrations.push({ name, config });
     },
-    registerCommand() {},
+    registerCommand(name, config) {
+      commands[name] = config;
+    },
   };
 }
 
@@ -62,6 +64,39 @@ try {
   const secondRegistrations = [];
   extension(createPi(secondRegistrations));
   assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]']);
+
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/quota')) {
+      return {
+        ok: true,
+        async json() {
+          return {
+            usage: {
+              fiveHour: { secondsUntilReset: 3599, requestCount: 2, percentUsed: 10 },
+              weekly: { secondsUntilReset: 259260, requestCount: 12, percentUsed: 20 },
+            },
+          };
+        },
+      };
+    }
+    return { ok: false, async json() { return {}; } };
+  };
+  const commands = {};
+  extension(createPi([], commands));
+  const notifications = [];
+  await commands.quota.handler([], {
+    ui: {
+      notify(message, level) {
+        notifications.push({ message, level });
+      },
+    },
+  });
+  assert.deepEqual(notifications, [
+    {
+      message: '5h: 10% • 2 req • resets 0h 59m | Week: 20% • 12 req • resets 3d 0h 1m',
+      level: 'info',
+    },
+  ]);
 } finally {
   if (originalApiKey === undefined) {
     delete process.env.THECLAWBAY_API_KEY;
