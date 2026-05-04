@@ -43,6 +43,7 @@ const GPT_54_DEFAULT_MODEL_ID = "gpt-5.4";
 const GPT_54_1M_MODEL_ID = "gpt-5.4[1m]";
 
 const MODEL_INPUTS = ["text", "image"] as const;
+const GPT_54_AND_55_THINKING_LEVEL_MAP = { xhigh: "xhigh" } as const;
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 const OPENAI_KNOWN_COSTS: Record<string, ProviderModelConfig["cost"]> = {
 	"gpt-5.5": { input: 5.0, output: 30.0, cacheRead: 0.5, cacheWrite: 5.0 },
@@ -150,6 +151,10 @@ function formatOpenAIModelName(id: string): string {
 		.join(" ");
 }
 
+function isGpt54Or55Model(id: string): boolean {
+	return id.startsWith("gpt-5.4") || id.startsWith("gpt-5.5");
+}
+
 function createModelConfig(
 	id: string,
 	name: string,
@@ -161,6 +166,7 @@ function createModelConfig(
 		id,
 		name,
 		reasoning: true,
+		...(isGpt54Or55Model(id) ? { thinkingLevelMap: { ...GPT_54_AND_55_THINKING_LEVEL_MAP } } : {}),
 		input: [...MODEL_INPUTS],
 		cost: { ...cost },
 		contextWindow,

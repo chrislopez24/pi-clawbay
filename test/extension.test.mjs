@@ -45,10 +45,15 @@ try {
   const fallbackGpt55 = firstRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5');
   assert.ok(fallbackGpt55, 'fallback models should include gpt-5.5');
   assert.equal(fallbackGpt55.contextWindow, 258000, 'gpt-5.5 should use the default 258k context window');
+  assert.equal(fallbackGpt55.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should explicitly expose xhigh thinking');
 
   await waitForRefresh();
   assert.equal(firstRegistrations.length, 2, 'live refresh should re-register after discovery');
   assert.deepEqual(firstRegistrations[1].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]']);
+  for (const id of ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]']) {
+    const model = firstRegistrations[1].config.models.find((entry) => entry.id === id);
+    assert.equal(model?.thinkingLevelMap?.xhigh, 'xhigh', `${id} should explicitly expose xhigh thinking`);
+  }
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
   assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]']);
