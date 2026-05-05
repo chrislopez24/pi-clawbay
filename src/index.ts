@@ -43,7 +43,7 @@ const GPT_54_DEFAULT_MODEL_ID = "gpt-5.4";
 const GPT_54_1M_MODEL_ID = "gpt-5.4[1m]";
 
 const MODEL_INPUTS = ["text", "image"] as const;
-const GPT_54_AND_55_THINKING_LEVEL_MAP = { xhigh: "xhigh" } as const;
+const OPENAI_CODEX_THINKING_LEVEL_MAP = { xhigh: "xhigh", minimal: "low" } as const;
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 const OPENAI_KNOWN_COSTS: Record<string, ProviderModelConfig["cost"]> = {
 	"gpt-5.5": { input: 5.0, output: 30.0, cacheRead: 0.5, cacheWrite: 5.0 },
@@ -56,11 +56,12 @@ const OPENAI_KNOWN_COSTS: Record<string, ProviderModelConfig["cost"]> = {
 	"gpt-5.1-codex-max": { input: 1.25, output: 10.0, cacheRead: 0.125, cacheWrite: 1.25 },
 	"gpt-5.1-codex-mini": { input: 0.25, output: 2.0, cacheRead: 0.025, cacheWrite: 0.25 },
 };
-const OPENAI_DEFAULT_CONTEXT_WINDOW = 258000;
-const OPENAI_272K_CONTEXT_WINDOW = 272000;
+const OPENAI_CODEX_CONTEXT_WINDOW = 272000;
+const OPENAI_DEFAULT_CONTEXT_WINDOW = OPENAI_CODEX_CONTEXT_WINDOW;
 const OPENAI_FRONTIER_CONTEXT_WINDOW = 1050000;
 const OPENAI_DEFAULT_MAX_TOKENS = 128000;
 
+const PINNED_MODEL_IDS = ["gpt-image-1.5", "gpt-image-2.0"];
 const FALLBACK_OPENAI_MODEL_IDS = [
 	"gpt-5.5",
 	GPT_54_DEFAULT_MODEL_ID,
@@ -71,6 +72,7 @@ const FALLBACK_OPENAI_MODEL_IDS = [
 	"gpt-5.2",
 	"gpt-5.1-codex-max",
 	"gpt-5.1-codex-mini",
+	...PINNED_MODEL_IDS,
 ];
 
 interface OpenAIModelListResponse {
@@ -155,6 +157,10 @@ function isGpt54Or55Model(id: string): boolean {
 	return id.startsWith("gpt-5.4") || id.startsWith("gpt-5.5");
 }
 
+function isImageGenerationModel(id: string): boolean {
+	return id.startsWith("gpt-image-");
+}
+
 function createModelConfig(
 	id: string,
 	name: string,
@@ -162,11 +168,13 @@ function createModelConfig(
 	contextWindow: number,
 	maxTokens: number
 ): ProviderModelConfig {
+	const isReasoningModel = !isImageGenerationModel(id);
+
 	return {
 		id,
 		name,
-		reasoning: true,
-		...(isGpt54Or55Model(id) ? { thinkingLevelMap: { ...GPT_54_AND_55_THINKING_LEVEL_MAP } } : {}),
+		reasoning: isReasoningModel,
+		...(isReasoningModel && isGpt54Or55Model(id) ? { thinkingLevelMap: { ...OPENAI_CODEX_THINKING_LEVEL_MAP } } : {}),
 		input: [...MODEL_INPUTS],
 		cost: { ...cost },
 		contextWindow,
@@ -178,7 +186,7 @@ function createOpenAIModel(id: string): ProviderModelConfig {
 	const cost = OPENAI_KNOWN_COSTS[id] ?? ZERO_COST;
 
 	if (id === GPT_54_DEFAULT_MODEL_ID) {
-		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_272K_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
+		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_CODEX_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
 	}
 
 	if (id === GPT_54_1M_MODEL_ID) {
@@ -196,8 +204,8 @@ function buildFallbackOpenAIModels(): ProviderModelConfig[] {
 	return buildOpenAIModels(FALLBACK_OPENAI_MODEL_IDS);
 }
 
-function normalizeOpenAIModelIds(ids: string[]): string[] {
-	return dedupeIds(
+function normalizeOpenAIModelIds(ids: string[], options?: { includePinned?: boolean }): string[] {
+	const normalized = dedupeIds(
 		ids.flatMap((id) => {
 			if (id.startsWith("claude-")) {
 				return [];
@@ -214,6 +222,8 @@ function normalizeOpenAIModelIds(ids: string[]): string[] {
 			return [id];
 		})
 	);
+
+	return options?.includePinned ? dedupeIds([...normalized, ...PINNED_MODEL_IDS]) : normalized;
 }
 
 function resolveUpstreamModelId(id: string): string {
@@ -328,7 +338,9 @@ function readCachedModelIds(now = Date.now()): string[] | null {
 			return null;
 		}
 
-		const ids = normalizeOpenAIModelIds(parsed.modelIds.filter((id): id is string => typeof id === "string" && id.length > 0));
+		const ids = normalizeOpenAIModelIds(parsed.modelIds.filter((id): id is string => typeof id === "string" && id.length > 0), {
+			includePinned: true,
+		});
 		return ids.length > 0 ? ids : null;
 	} catch {
 		return null;
@@ -345,7 +357,7 @@ function writeCachedModelIds(ids: string[], now = Date.now()): void {
 				{
 					version: MODEL_CACHE_VERSION,
 					fetchedAt: new Date(now).toISOString(),
-					modelIds: normalizeOpenAIModelIds(ids),
+					modelIds: normalizeOpenAIModelIds(ids, { includePinned: true }),
 				},
 				null,
 				2
@@ -373,7 +385,8 @@ async function fetchOpenAIModelIds(apiKey: string): Promise<string[] | null> {
 		const ids = normalizeOpenAIModelIds(
 			(payload.data ?? [])
 				.map((entry) => entry.id?.trim())
-				.filter((id): id is string => typeof id === "string" && id.length > 0)
+				.filter((id): id is string => typeof id === "string" && id.length > 0),
+			{ includePinned: true }
 		);
 
 		return ids.length > 0 ? ids : null;
@@ -390,7 +403,12 @@ function refreshProviderModels(pi: ExtensionAPI, apiKey: string): void {
 
 		writeCachedModelIds(ids);
 		const models = buildOpenAIModels(ids);
-		registerProviders(pi, models);
+		try {
+			registerProviders(pi, models);
+		} catch (error) {
+			console.warn(`[theclawbay] Skipped live model refresh: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
 		console.info(`[theclawbay] Registered ${models.length} OpenAI-compatible models from live model discovery.`);
 	});
 }
