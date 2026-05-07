@@ -18,14 +18,23 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
+	calculateCost,
+	clampThinkingLevel,
+	createAssistantMessageEventStream,
+	parseStreamingJson,
 	streamSimpleOpenAIResponses,
+	type AssistantMessage,
 	type AssistantMessageEventStream,
 	type Context,
 	type Model,
+	type ImageContent,
 	type SimpleStreamOptions,
+	type TextContent,
+	type ToolCall,
 } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ProviderModelConfig } from "@mariozechner/pi-coding-agent";
 
@@ -35,6 +44,9 @@ const THECLAWBAY_QUOTA_URL = "https://theclawbay.com/api/codex-auth/v1/quota";
 const THECLAWBAY_OPENAI_MODELS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/models`;
 const THECLAWBAY_CODEX_API = "theclawbay-codex-responses";
 const THECLAWBAY_CHATGPT_ACCOUNT_ID = "theclawbay";
+const IMAGE_GENERATION_ENV = "PI_CLAWBAY_IMAGE_GENERATION";
+const GENERATED_IMAGES_DIR_ENV = "PI_CLAWBAY_GENERATED_IMAGES_DIR";
+const HOSTED_IMAGE_GENERATION_TOOL = { type: "image_generation", output_format: "png" } as const;
 const MODEL_CACHE_VERSION = 1;
 const MODEL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -61,7 +73,6 @@ const OPENAI_DEFAULT_CONTEXT_WINDOW = OPENAI_CODEX_CONTEXT_WINDOW;
 const OPENAI_FRONTIER_CONTEXT_WINDOW = 1050000;
 const OPENAI_DEFAULT_MAX_TOKENS = 128000;
 
-const PINNED_MODEL_IDS = ["gpt-image-1.5", "gpt-image-2.0"];
 const FALLBACK_OPENAI_MODEL_IDS = [
 	"gpt-5.5",
 	GPT_54_DEFAULT_MODEL_ID,
@@ -72,7 +83,6 @@ const FALLBACK_OPENAI_MODEL_IDS = [
 	"gpt-5.2",
 	"gpt-5.1-codex-max",
 	"gpt-5.1-codex-mini",
-	...PINNED_MODEL_IDS,
 ];
 
 interface OpenAIModelListResponse {
@@ -197,17 +207,17 @@ function createOpenAIModel(id: string): ProviderModelConfig {
 }
 
 function buildOpenAIModels(ids: string[]): ProviderModelConfig[] {
-	return dedupeIds(ids).map((id) => createOpenAIModel(id));
+	return dedupeIds(ids).filter((id) => !isImageGenerationModel(id)).map((id) => createOpenAIModel(id));
 }
 
 function buildFallbackOpenAIModels(): ProviderModelConfig[] {
 	return buildOpenAIModels(FALLBACK_OPENAI_MODEL_IDS);
 }
 
-function normalizeOpenAIModelIds(ids: string[], options?: { includePinned?: boolean }): string[] {
-	const normalized = dedupeIds(
+function normalizeOpenAIModelIds(ids: string[]): string[] {
+	return dedupeIds(
 		ids.flatMap((id) => {
-			if (id.startsWith("claude-")) {
+			if (id.startsWith("claude-") || isImageGenerationModel(id)) {
 				return [];
 			}
 
@@ -222,8 +232,6 @@ function normalizeOpenAIModelIds(ids: string[], options?: { includePinned?: bool
 			return [id];
 		})
 	);
-
-	return options?.includePinned ? dedupeIds([...normalized, ...PINNED_MODEL_IDS]) : normalized;
 }
 
 function resolveUpstreamModelId(id: string): string {
@@ -244,7 +252,17 @@ function buildTheClawBayHeaders(options?: SimpleStreamOptions): Record<string, s
 	};
 }
 
-function buildTheClawBayPayload(payload: unknown, context: Context): unknown {
+function isHostedImageGenerationEnabled(): boolean {
+	return process.env[IMAGE_GENERATION_ENV]?.trim().toLowerCase() === "hosted";
+}
+
+function appendHostedImageGenerationTool(tools: unknown): unknown[] {
+	const existing = Array.isArray(tools) ? tools.filter((tool) => tool && typeof tool === "object") : [];
+	const hasHostedImageTool = existing.some((tool) => (tool as { type?: unknown }).type === HOSTED_IMAGE_GENERATION_TOOL.type);
+	return hasHostedImageTool ? existing : [...existing, { ...HOSTED_IMAGE_GENERATION_TOOL }];
+}
+
+function buildTheClawBayPayload(payload: unknown, context: Context, options?: { includeHostedImageGeneration?: boolean }): unknown {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
 		return payload;
 	}
@@ -267,12 +285,512 @@ function buildTheClawBayPayload(payload: unknown, context: Context): unknown {
 		...source,
 		instructions: context.systemPrompt,
 		input,
+		...(options?.includeHostedImageGeneration ? { tools: appendHostedImageGenerationTool(source.tools) } : {}),
 		include: dedupeIds([...include, "reasoning.encrypted_content"]),
 		text: { verbosity: "medium" },
 		tool_choice: "auto",
 		parallel_tool_calls: true,
 		store: false,
 	};
+}
+
+function sanitizeGeneratedImagePathPart(value: string | undefined, fallback: string): string {
+	const sanitized = (value?.trim() || fallback).replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+	return (sanitized || fallback).slice(0, 128);
+}
+
+function getGeneratedImagesRoot(): string {
+	const overrideDir = process.env[GENERATED_IMAGES_DIR_ENV]?.trim();
+	if (overrideDir) {
+		return overrideDir;
+	}
+
+	const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
+	return join(agentDir, "generated_images");
+}
+
+function getGeneratedImagePath(sessionId: string | undefined, callId: string): string {
+	return join(
+		getGeneratedImagesRoot(),
+		sanitizeGeneratedImagePathPart(sessionId, "session"),
+		`${sanitizeGeneratedImagePathPart(callId, "image_generation_call")}.png`
+	);
+}
+
+function saveImageGenerationResult(sessionId: string | undefined, callId: string, result: string): string {
+	const filePath = getGeneratedImagePath(sessionId, callId);
+	mkdirSync(dirname(filePath), { recursive: true });
+	writeFileSync(filePath, Buffer.from(result, "base64"));
+	return filePath;
+}
+
+function responseInputContent(content: string | (TextContent | ImageContent)[]): unknown {
+	if (typeof content === "string") {
+		return [{ type: "input_text", text: content }];
+	}
+
+	return content.map((item) => {
+		if (item.type === "text") {
+			return { type: "input_text", text: item.text };
+		}
+
+		return {
+			type: "input_image",
+			detail: "auto",
+			image_url: `data:${item.mimeType};base64,${item.data}`,
+		};
+	});
+}
+
+function convertTheClawBayResponsesMessages(context: Context, model: Model<"openai-responses">): unknown[] {
+	const messages: unknown[] = [];
+
+	for (const msg of context.messages) {
+		if (msg.role === "user") {
+			const content = responseInputContent(msg.content);
+			if (Array.isArray(content) && content.length > 0) {
+				messages.push({ role: "user", content });
+			}
+		} else if (msg.role === "assistant") {
+			for (const block of msg.content) {
+				if (block.type === "thinking" && block.thinkingSignature) {
+					try {
+						messages.push(JSON.parse(block.thinkingSignature) as unknown);
+					} catch {
+						// Ignore malformed opaque reasoning history.
+					}
+				} else if (block.type === "text") {
+					messages.push({
+						type: "message",
+						role: "assistant",
+						content: [{ type: "output_text", text: block.text, annotations: [] }],
+						status: "completed",
+					});
+				} else if (block.type === "toolCall") {
+					const [callId, itemId] = block.id.split("|");
+					messages.push({
+						type: "function_call",
+						id: itemId,
+						call_id: callId,
+						name: block.name,
+						arguments: JSON.stringify(block.arguments),
+					});
+				}
+			}
+		} else if (msg.role === "toolResult") {
+			const textResult = msg.content
+				.filter((item) => item.type === "text")
+				.map((item) => item.text)
+				.join("\n");
+			const imageResults = msg.content.filter((item) => item.type === "image");
+			const [callId] = msg.toolCallId.split("|");
+			const output =
+				imageResults.length > 0 && model.input.includes("image")
+					? [
+							...(textResult ? [{ type: "input_text", text: textResult }] : []),
+							...imageResults.map((item) => ({
+								type: "input_image",
+								detail: "auto",
+								image_url: `data:${item.mimeType};base64,${item.data}`,
+							})),
+						]
+					: textResult || "(see attached image)";
+			messages.push({ type: "function_call_output", call_id: callId, output });
+		}
+	}
+
+	return messages;
+}
+
+function convertTheClawBayResponsesTools(context: Context): unknown[] | undefined {
+	const functionTools = context.tools?.map((tool) => ({
+		type: "function",
+		name: tool.name,
+		description: tool.description,
+		parameters: tool.parameters,
+		strict: null,
+	}));
+
+	return appendHostedImageGenerationTool(functionTools);
+}
+
+function buildHostedImageGenerationPayload(
+	model: Model<"openai-responses">,
+	context: Context,
+	options?: SimpleStreamOptions
+): Record<string, unknown> {
+	const body: Record<string, unknown> = {
+		model: model.id,
+		store: false,
+		stream: true,
+		instructions: context.systemPrompt,
+		input: convertTheClawBayResponsesMessages(context, model),
+		text: { verbosity: "medium" },
+		include: ["reasoning.encrypted_content"],
+		prompt_cache_key: options?.sessionId,
+		tool_choice: "auto",
+		parallel_tool_calls: true,
+		tools: convertTheClawBayResponsesTools(context),
+	};
+
+	if (options?.temperature !== undefined) {
+		body.temperature = options.temperature;
+	}
+	if (options?.maxTokens !== undefined) {
+		body.max_output_tokens = options.maxTokens;
+	}
+
+	if (model.reasoning) {
+		const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
+		if (clampedReasoning && clampedReasoning !== "off") {
+			body.reasoning = {
+				effort: model.thinkingLevelMap?.[clampedReasoning] ?? clampedReasoning,
+				summary: "auto",
+			};
+		} else if (model.thinkingLevelMap?.off !== null) {
+			body.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
+		}
+	}
+
+	return body;
+}
+
+function resolveTheClawBayCodexResponsesUrl(baseUrl: string): string {
+	const normalized = baseUrl.replace(/\/+$/, "");
+	if (normalized.endsWith("/responses")) {
+		return normalized;
+	}
+	return `${normalized}/responses`;
+}
+
+async function* parseTheClawBaySse(response: Response): AsyncGenerator<Record<string, unknown>> {
+	if (!response.body) {
+		return;
+	}
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) {
+				break;
+			}
+
+			buffer += decoder.decode(value, { stream: true });
+			let index = buffer.indexOf("\n\n");
+			while (index !== -1) {
+				const chunk = buffer.slice(0, index);
+				buffer = buffer.slice(index + 2);
+				const data = chunk
+					.split("\n")
+					.filter((line) => line.startsWith("data:"))
+					.map((line) => line.slice(5).trim())
+					.join("\n")
+					.trim();
+
+				if (data && data !== "[DONE]") {
+					yield JSON.parse(data) as Record<string, unknown>;
+				}
+				index = buffer.indexOf("\n\n");
+			}
+		}
+	} finally {
+		try {
+			await reader.cancel();
+		} catch {
+			// Ignore stream cleanup errors.
+		}
+		try {
+			reader.releaseLock();
+		} catch {
+			// Ignore stream cleanup errors.
+		}
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function getEventType(event: Record<string, unknown>): string | undefined {
+	return typeof event.type === "string" ? event.type : undefined;
+}
+
+function getEventItem(event: Record<string, unknown>): Record<string, unknown> | undefined {
+	return isRecord(event.item) ? event.item : undefined;
+}
+
+function getBlockIndex(output: AssistantMessage): number {
+	return output.content.length - 1;
+}
+
+function pushGeneratedImageText(
+	stream: AssistantMessageEventStream,
+	output: AssistantMessage,
+	filePath: string,
+	revisedPrompt?: string
+): void {
+	const lines = [`Generated image saved to: ${pathToFileURL(filePath).href}`, `Path: ${filePath}`];
+	if (revisedPrompt) {
+		lines.push(`Revised prompt: ${revisedPrompt}`);
+	}
+	const text = lines.join("\n");
+	output.content.push({ type: "text", text });
+	const contentIndex = getBlockIndex(output);
+	stream.push({ type: "text_start", contentIndex, partial: output });
+	stream.push({ type: "text_delta", contentIndex, delta: text, partial: output });
+	stream.push({ type: "text_end", contentIndex, content: text, partial: output });
+}
+
+function readResponseUsage(response: Record<string, unknown>, output: AssistantMessage, model: Model<"openai-responses">): void {
+	if (!isRecord(response.usage)) {
+		return;
+	}
+
+	const usage = response.usage;
+	const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
+	const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
+	const totalTokens = typeof usage.total_tokens === "number" ? usage.total_tokens : inputTokens + outputTokens;
+	const inputDetails = isRecord(usage.input_tokens_details) ? usage.input_tokens_details : undefined;
+	const cachedTokens = typeof inputDetails?.cached_tokens === "number" ? inputDetails.cached_tokens : 0;
+	output.usage = {
+		input: inputTokens - cachedTokens,
+		output: outputTokens,
+		cacheRead: cachedTokens,
+		cacheWrite: 0,
+		totalTokens,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	calculateCost(model, output.usage);
+}
+
+function mapResponseStopReason(status: unknown): AssistantMessage["stopReason"] {
+	if (status === "incomplete") {
+		return "length";
+	}
+	if (status === "failed" || status === "cancelled") {
+		return "error";
+	}
+	return "stop";
+}
+
+async function processTheClawBayHostedImageStream(
+	events: AsyncIterable<Record<string, unknown>>,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	model: Model<"openai-responses">,
+	options?: SimpleStreamOptions
+): Promise<void> {
+	let currentItem: Record<string, unknown> | null = null;
+	let currentBlock: (ToolCall & { partialJson?: string }) | { type: "text"; text: string; textSignature?: string } | { type: "thinking"; thinking: string; thinkingSignature?: string } | null = null;
+
+	for await (const event of events) {
+		const eventType = getEventType(event);
+
+		if (eventType === "response.created" && isRecord(event.response) && typeof event.response.id === "string") {
+			output.responseId = event.response.id;
+		} else if (eventType === "response.output_item.added") {
+			const item = getEventItem(event);
+			if (!item || typeof item.type !== "string") {
+				continue;
+			}
+			currentItem = item;
+			if (item.type === "reasoning") {
+				currentBlock = { type: "thinking", thinking: "" };
+				output.content.push(currentBlock);
+				stream.push({ type: "thinking_start", contentIndex: getBlockIndex(output), partial: output });
+			} else if (item.type === "message") {
+				currentBlock = { type: "text", text: "" };
+				output.content.push(currentBlock);
+				stream.push({ type: "text_start", contentIndex: getBlockIndex(output), partial: output });
+			} else if (item.type === "function_call") {
+				currentBlock = {
+					type: "toolCall",
+					id: `${String(item.call_id ?? "call")}|${String(item.id ?? "fc")}`,
+					name: String(item.name ?? ""),
+					arguments: {},
+					partialJson: typeof item.arguments === "string" ? item.arguments : "",
+				};
+				output.content.push(currentBlock);
+				stream.push({ type: "toolcall_start", contentIndex: getBlockIndex(output), partial: output });
+			}
+		} else if (eventType === "response.content_part.added") {
+			if (currentItem?.type === "message" && isRecord(event.part)) {
+				const content = Array.isArray(currentItem.content) ? currentItem.content : [];
+				currentItem.content = [...content, event.part];
+			}
+		} else if (eventType === "response.output_text.delta") {
+			if (currentItem?.type === "message" && currentBlock?.type === "text" && typeof event.delta === "string") {
+				currentBlock.text += event.delta;
+				stream.push({ type: "text_delta", contentIndex: getBlockIndex(output), delta: event.delta, partial: output });
+			}
+		} else if (eventType === "response.output_text.done") {
+			if (currentItem?.type === "message" && currentBlock?.type === "text" && typeof event.text === "string") {
+				const delta = event.text.startsWith(currentBlock.text) ? event.text.slice(currentBlock.text.length) : event.text;
+				currentBlock.text = event.text;
+				if (delta) {
+					stream.push({ type: "text_delta", contentIndex: getBlockIndex(output), delta, partial: output });
+				}
+			}
+		} else if (eventType === "response.reasoning_summary_text.delta") {
+			if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking" && typeof event.delta === "string") {
+				currentBlock.thinking += event.delta;
+				stream.push({ type: "thinking_delta", contentIndex: getBlockIndex(output), delta: event.delta, partial: output });
+			}
+		} else if (eventType === "response.function_call_arguments.delta") {
+			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall" && typeof event.delta === "string") {
+				currentBlock.partialJson = (currentBlock.partialJson ?? "") + event.delta;
+				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+				stream.push({ type: "toolcall_delta", contentIndex: getBlockIndex(output), delta: event.delta, partial: output });
+			}
+		} else if (eventType === "response.function_call_arguments.done") {
+			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall" && typeof event.arguments === "string") {
+				const previous = currentBlock.partialJson ?? "";
+				currentBlock.partialJson = event.arguments;
+				currentBlock.arguments = parseStreamingJson(event.arguments || "{}");
+				const delta = event.arguments.startsWith(previous) ? event.arguments.slice(previous.length) : event.arguments;
+				if (delta) {
+					stream.push({ type: "toolcall_delta", contentIndex: getBlockIndex(output), delta, partial: output });
+				}
+			}
+		} else if (eventType === "response.output_item.done") {
+			const item = getEventItem(event);
+			if (!item || typeof item.type !== "string") {
+				continue;
+			}
+
+			if (item.type === "message" && currentBlock?.type === "text") {
+				if (Array.isArray(item.content)) {
+					currentBlock.text = item.content
+						.map((contentItem) => (isRecord(contentItem) && typeof contentItem.text === "string" ? contentItem.text : ""))
+						.join("");
+				}
+				stream.push({ type: "text_end", contentIndex: getBlockIndex(output), content: currentBlock.text, partial: output });
+				currentBlock = null;
+			} else if (item.type === "reasoning" && currentBlock?.type === "thinking") {
+				currentBlock.thinkingSignature = JSON.stringify(item);
+				stream.push({ type: "thinking_end", contentIndex: getBlockIndex(output), content: currentBlock.thinking, partial: output });
+				currentBlock = null;
+			} else if (item.type === "function_call") {
+				if (currentBlock?.type === "toolCall") {
+					currentBlock.arguments = parseStreamingJson(currentBlock.partialJson || (typeof item.arguments === "string" ? item.arguments : "{}"));
+					delete currentBlock.partialJson;
+					stream.push({ type: "toolcall_end", contentIndex: getBlockIndex(output), toolCall: currentBlock, partial: output });
+				}
+				currentBlock = null;
+			} else if (item.type === "image_generation_call") {
+				if (typeof item.id === "string" && typeof item.result === "string") {
+					const filePath = saveImageGenerationResult(options?.sessionId, item.id, item.result);
+					pushGeneratedImageText(
+						stream,
+						output,
+						filePath,
+						typeof item.revised_prompt === "string" ? item.revised_prompt : undefined
+					);
+				}
+			}
+		} else if (eventType === "response.completed" && isRecord(event.response)) {
+			if (typeof event.response.id === "string") {
+				output.responseId = event.response.id;
+			}
+			readResponseUsage(event.response, output, model);
+			output.stopReason = mapResponseStopReason(event.response.status);
+			if (output.content.some((block) => block.type === "toolCall") && output.stopReason === "stop") {
+				output.stopReason = "toolUse";
+			}
+		} else if (eventType === "response.failed") {
+			const response = isRecord(event.response) ? event.response : undefined;
+			const error = isRecord(response?.error) ? response.error : undefined;
+			const message = typeof error?.message === "string" ? error.message : "TheClawBay response failed";
+			throw new Error(message);
+		} else if (eventType === "error") {
+			throw new Error(typeof event.message === "string" ? event.message : "TheClawBay stream error");
+		}
+	}
+}
+
+function streamHostedImageGenerationTheClawBayCodexResponses(
+	model: Model<"openai-responses">,
+	context: Context,
+	options?: SimpleStreamOptions
+): AssistantMessageEventStream {
+	const stream = createAssistantMessageEventStream();
+
+	void (async () => {
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+
+		try {
+			const apiKey = options?.apiKey || process.env.THECLAWBAY_API_KEY;
+			if (!apiKey) {
+				throw new Error("No API key for provider: theclawbay");
+			}
+
+			let payload: unknown = buildHostedImageGenerationPayload(model, context, options);
+			const nextPayload = await options?.onPayload?.(payload, model);
+			if (nextPayload !== undefined) {
+				payload = nextPayload;
+			}
+
+			const response = await fetch(resolveTheClawBayCodexResponsesUrl(model.baseUrl), {
+				method: "POST",
+				headers: {
+					...buildTheClawBayHeaders(options),
+					Authorization: `Bearer ${apiKey}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify(payload),
+				signal: options?.signal,
+			});
+			await options?.onResponse?.(
+				{ status: response.status, headers: Object.fromEntries(response.headers.entries()) },
+				model
+			);
+
+			if (!response.ok) {
+				throw new Error(await response.text());
+			}
+
+			stream.push({ type: "start", partial: output });
+			await processTheClawBayHostedImageStream(parseTheClawBaySse(response), output, stream, model, options);
+			if (options?.signal?.aborted) {
+				throw new Error("Request was aborted");
+			}
+			if (output.stopReason === "error" || output.stopReason === "aborted") {
+				throw new Error(output.errorMessage || "TheClawBay response failed");
+			}
+			stream.push({ type: "done", reason: output.stopReason, message: output });
+			stream.end();
+		} catch (error) {
+			for (const block of output.content) {
+				delete (block as { partialJson?: unknown }).partialJson;
+			}
+			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+			output.errorMessage = error instanceof Error ? error.message : String(error);
+			stream.push({ type: "error", reason: output.stopReason, error: output });
+			stream.end();
+		}
+	})();
+
+	return stream;
 }
 
 function streamSimpleTheClawBayCodexResponses(
@@ -289,6 +807,18 @@ function streamSimpleTheClawBayCodexResponses(
 		...typedModel,
 		id: resolveUpstreamModelId(typedModel.id),
 	} as Model<"openai-responses">;
+
+	if (isHostedImageGenerationEnabled()) {
+		return streamHostedImageGenerationTheClawBayCodexResponses(remappedModel, typedContext, {
+			...typedOptions,
+			headers,
+			onPayload: async (payload, streamModel) => {
+				const transformedPayload = buildTheClawBayPayload(payload, typedContext, { includeHostedImageGeneration: true });
+				const nextPayload = await originalOnPayload?.(transformedPayload, streamModel);
+				return nextPayload === undefined ? transformedPayload : nextPayload;
+			},
+		});
+	}
 
 	return streamSimpleOpenAIResponses(remappedModel, typedContext, {
 		...typedOptions,
@@ -338,9 +868,7 @@ function readCachedModelIds(now = Date.now()): string[] | null {
 			return null;
 		}
 
-		const ids = normalizeOpenAIModelIds(parsed.modelIds.filter((id): id is string => typeof id === "string" && id.length > 0), {
-			includePinned: true,
-		});
+		const ids = normalizeOpenAIModelIds(parsed.modelIds.filter((id): id is string => typeof id === "string" && id.length > 0));
 		return ids.length > 0 ? ids : null;
 	} catch {
 		return null;
@@ -357,7 +885,7 @@ function writeCachedModelIds(ids: string[], now = Date.now()): void {
 				{
 					version: MODEL_CACHE_VERSION,
 					fetchedAt: new Date(now).toISOString(),
-					modelIds: normalizeOpenAIModelIds(ids, { includePinned: true }),
+					modelIds: normalizeOpenAIModelIds(ids),
 				},
 				null,
 				2
@@ -385,8 +913,7 @@ async function fetchOpenAIModelIds(apiKey: string): Promise<string[] | null> {
 		const ids = normalizeOpenAIModelIds(
 			(payload.data ?? [])
 				.map((entry) => entry.id?.trim())
-				.filter((id): id is string => typeof id === "string" && id.length > 0),
-			{ includePinned: true }
+				.filter((id): id is string => typeof id === "string" && id.length > 0)
 		);
 
 		return ids.length > 0 ? ids : null;
