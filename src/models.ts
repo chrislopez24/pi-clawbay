@@ -2,15 +2,18 @@ import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import {
 	FALLBACK_OPENAI_MODEL_IDS,
 	HIDDEN_MODEL_ID_PREFIXES,
+	GPT_IMAGE_2_MODEL_ID,
 	GPT_54_1M_MODEL_ID,
 	GPT_54_DEFAULT_MODEL_ID,
 	GPT_54_UPSTREAM_MODEL_ID,
+	IMAGE_GENERATION_MODEL_INPUTS,
 	MODEL_INPUTS,
 	OPENAI_CODEX_CONTEXT_WINDOW,
 	OPENAI_CODEX_THINKING_LEVEL_MAP,
 	OPENAI_DEFAULT_CONTEXT_WINDOW,
 	OPENAI_DEFAULT_MAX_TOKENS,
 	OPENAI_FRONTIER_CONTEXT_WINDOW,
+	OPENAI_IMAGE_MAX_TOKENS,
 	OPENAI_KNOWN_COSTS,
 	PINNED_MODEL_IDS,
 	ZERO_COST,
@@ -39,6 +42,10 @@ function toTitleCase(value: string): string {
 }
 
 function formatOpenAIModelName(id: string): string {
+	if (id === GPT_IMAGE_2_MODEL_ID) {
+		return "GPT Image 2";
+	}
+
 	if (id === GPT_54_DEFAULT_MODEL_ID) {
 		return "GPT-5.4";
 	}
@@ -67,8 +74,12 @@ function isGpt54Or55Model(id: string): boolean {
 	return id.startsWith("gpt-5.4") || id.startsWith("gpt-5.5");
 }
 
-function isImageGenerationModel(id: string): boolean {
-	return HIDDEN_MODEL_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
+export function isSupportedImageGenerationModel(id: string): boolean {
+	return id === GPT_IMAGE_2_MODEL_ID;
+}
+
+function isHiddenImageGenerationModel(id: string): boolean {
+	return HIDDEN_MODEL_ID_PREFIXES.some((prefix) => id.startsWith(prefix)) && !isSupportedImageGenerationModel(id);
 }
 
 function createModelConfig(
@@ -78,14 +89,15 @@ function createModelConfig(
 	contextWindow: number,
 	maxTokens: number
 ): ProviderModelConfig {
-	const isReasoningModel = !isImageGenerationModel(id);
+	const isImageModel = isSupportedImageGenerationModel(id);
+	const isReasoningModel = !isImageModel;
 
 	return {
 		id,
 		name,
 		reasoning: isReasoningModel,
 		...(isReasoningModel && isGpt54Or55Model(id) ? { thinkingLevelMap: { ...OPENAI_CODEX_THINKING_LEVEL_MAP } } : {}),
-		input: [...MODEL_INPUTS],
+		input: isImageModel ? [...IMAGE_GENERATION_MODEL_INPUTS] : [...MODEL_INPUTS],
 		cost: { ...cost },
 		contextWindow,
 		maxTokens,
@@ -101,6 +113,10 @@ function createOpenAIModel(id: string): ProviderModelConfig {
 
 	if (id === GPT_54_1M_MODEL_ID) {
 		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_FRONTIER_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
+	}
+
+	if (id === GPT_IMAGE_2_MODEL_ID) {
+		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_IMAGE_MAX_TOKENS);
 	}
 
 	return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
@@ -120,7 +136,7 @@ export function normalizeOpenAIModelIds(ids: string[], options?: { includePinned
 }
 
 function normalizeOpenAIModelId(id: string): string[] {
-	if (id.startsWith("claude-") || id === "gpt-5.4-pro" || isImageGenerationModel(id)) {
+	if (id.startsWith("claude-") || id === "gpt-5.4-pro" || isHiddenImageGenerationModel(id)) {
 		return [];
 	}
 

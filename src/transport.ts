@@ -8,7 +8,8 @@ import {
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { THECLAWBAY_CHATGPT_ACCOUNT_ID } from "./constants.js";
-import { dedupeIds, resolveUpstreamModelId } from "./models.js";
+import { streamSimpleTheClawBayImageGeneration } from "./image-generation.js";
+import { dedupeIds, isSupportedImageGenerationModel, resolveUpstreamModelId } from "./models.js";
 
 export function buildTheClawBayHeaders(options?: SimpleStreamOptions): Record<string, string> {
 	return {
@@ -134,6 +135,10 @@ export function streamSimpleTheClawBayCodexResponses(
 	const typedModel = model as Model<Api>;
 	const typedContext = context as Context;
 	const typedOptions = options as SimpleStreamOptions | undefined;
+	if (isSupportedImageGenerationModel(typedModel.id)) {
+		return streamSimpleTheClawBayImageGeneration(typedModel, typedContext, typedOptions);
+	}
+
 	const originalOnPayload = typedOptions?.onPayload;
 	const streamModel = createTheClawBayStreamModel(typedModel);
 	const streamOptions: SimpleStreamOptions = {

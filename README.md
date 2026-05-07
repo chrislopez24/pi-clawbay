@@ -7,6 +7,7 @@ A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi)
 - **GPT-5 & Codex Models** - Access via Codex Responses API with session-based prompt cache
 - **Single Provider** - Only `theclawbay` is registered
 - **GPT-5.4 Split Options** - `gpt-5.4` and `gpt-5.4[1m]` for clearer cost/context choice
+- **GPT Image 2** - Generate PNG images through TheClawBay's OpenAI-compatible Images endpoint
 - **High Usage Headroom** - More capacity than standard subscriptions
 - **Simple Setup** - Single API key
 
@@ -56,9 +57,13 @@ Model IDs are discovered dynamically at extension load from:
 
 If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to the last successful discovery cache, even if it is stale, then to a bundled default list so `/model` still works on startup. Live discovery refreshes the cache in the background after the provider has been registered.
 
-Requests for `theclawbay/*` models are sent through TheClawBay's native Codex route:
+Requests for `theclawbay/*` text and coding models are sent through TheClawBay's native Codex route:
 
 - `https://api.theclawbay.com/backend-api/codex`
+
+Requests for `theclawbay/gpt-image-2` are sent through TheClawBay's OpenAI-compatible Images route:
+
+- `https://api.theclawbay.com/v1/images/generations`
 
 This extension uses a custom Responses transport for that route. It sends:
 
@@ -98,6 +103,7 @@ Why split it?
 - `gpt-5.4` is configured with a `272,000` token context window.
 - `gpt-5.4[1m]` is configured with a `1,050,000` token context window.
 - Current non-5.4 GPT-5/Codex variants default to `272,000` context and `128,000` max output tokens.
+- `gpt-image-2` uses the Images API path with `1024x1024` PNG output, `272,000` context metadata, and `65,536` max output metadata.
 
 ### Example Model List
 
@@ -107,13 +113,14 @@ Current fallback list in this package:
 - `gpt-5.4`
 - `gpt-5.4[1m]`
 - `gpt-5.4-mini`
+- `gpt-image-2`
 - `gpt-5.3-codex`
 - `gpt-5.2-codex`
 - `gpt-5.2`
 - `gpt-5.1-codex-max`
 - `gpt-5.1-codex-mini`
 
-Image-generation models returned by discovery, such as `gpt-image-*`, are intentionally hidden from `/model` until this extension has a dedicated, tested image-generation flow.
+`gpt-image-2` is exposed because TheClawBay's latest npm setup marks it as an OpenAI-compatible image generation endpoint backed by `codex-lb`. Other native image-generation models returned by discovery, such as `gpt-image-1.5`, remain hidden until this extension has a dedicated, tested flow for them.
 
 ## Usage
 
@@ -125,7 +132,10 @@ Use `/model` command in pi:
 /model theclawbay/gpt-5.5
 /model theclawbay/gpt-5.4
 /model theclawbay/gpt-5.4[1m]
+/model theclawbay/gpt-image-2
 ```
+
+When `gpt-image-2` is selected, Pi receives a normal assistant message event sequence and the generated PNG is saved locally. Set `PI_CLAWBAY_IMAGE_DIR` to override the output directory; otherwise images are saved under Pi's generated-files directory.
 
 ### Commands
 
@@ -152,6 +162,7 @@ export default function (pi: ExtensionAPI) {
   // - theclawbay/gpt-5.4
   // - theclawbay/gpt-5.4[1m]
   // - theclawbay/gpt-5.4-mini
+  // - theclawbay/gpt-image-2
   // - theclawbay/gpt-5.3-codex
 }
 ```
@@ -163,6 +174,7 @@ export default function (pi: ExtensionAPI) {
 | Provider | Base URL | API Type |
 |----------|----------|----------|
 | `theclawbay` | `https://api.theclawbay.com/backend-api/codex` | OpenAI Codex Responses |
+| `theclawbay/gpt-image-2` | `https://api.theclawbay.com/v1/images/generations` | OpenAI Images Generations |
 
 ### Authentication
 
@@ -211,6 +223,9 @@ PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/
 
 # Tool-call path
 PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gpt-5.4 --thinking low --tools ls -p "Use the ls tool on the current directory, then summarize whether package.json exists."
+
+# Image generation path
+PI_CLAWBAY_IMAGE_DIR=/tmp/pi-clawbay-images pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gpt-image-2 -p "Generate a simple square icon of a red crab claw on a white background. No text."
 ```
 
 ## Troubleshooting
@@ -219,7 +234,8 @@ PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/
 - `401` or `invalid_api_key`: verify the key in the TheClawBay dashboard and in your shell environment.
 - `429`, `weekly_cost_limit_reached`, or `5h_cost_limit_reached`: run `/quota` or `/clawbay-quota` and wait for the reset window.
 - Model missing from `/model`: run `/clawbay-refresh-models`; if discovery still omits it, TheClawBay may not expose it for your account.
-- `gpt-image-*` missing: image-generation models are intentionally hidden until this extension has a dedicated tested image flow.
+- `gpt-image-2` missing: run `/clawbay-refresh-models`; if discovery still omits it, TheClawBay may not expose it for your account.
+- `gpt-image-1.5` missing: native image output models are intentionally hidden until this extension has a dedicated tested image flow for them.
 
 ## Building
 

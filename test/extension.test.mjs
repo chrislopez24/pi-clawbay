@@ -1,23 +1,27 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import extension from '../dist/index.js';
 import { readCachedModelIds } from '../dist/model-cache.js';
-import { normalizeOpenAIModelIds } from '../dist/models.js';
+import { buildOpenAIModels, normalizeOpenAIModelIds } from '../dist/models.js';
 import {
   buildTheClawBayHeaders,
   buildTheClawBayPayload,
   createTheClawBayStreamContext,
   createTheClawBayStreamModel,
   restoreTheClawBayEventProvider,
+  streamSimpleTheClawBayCodexResponses,
 } from '../dist/transport.js';
 
 const cacheDir = mkdtempSync(join(tmpdir(), 'pi-clawbay-test-'));
+const imageDir = mkdtempSync(join(tmpdir(), 'pi-clawbay-images-'));
 const originalApiKey = process.env.THECLAWBAY_API_KEY;
 const originalCacheDir = process.env.PI_CLAWBAY_CACHE_DIR;
+const originalImageDir = process.env.PI_CLAWBAY_IMAGE_DIR;
 const originalFetch = globalThis.fetch;
 process.env.PI_CLAWBAY_CACHE_DIR = cacheDir;
+process.env.PI_CLAWBAY_IMAGE_DIR = imageDir;
 
 function createPi(registrations, commands = {}) {
   return {
@@ -51,7 +55,7 @@ try {
       return {
         ok: true,
         async json() {
-          return { data: [{ id: 'gpt-5.5' }, { id: 'gpt-5.4' }] };
+          return { data: [{ id: 'gpt-5.5' }, { id: 'gpt-image-2' }, { id: 'gpt-5.4' }] };
         },
       };
     }
@@ -67,11 +71,12 @@ try {
   assert.equal(fallbackGpt55.contextWindow, 272000, 'gpt-5.5 should use the default 272k Codex context window');
   assert.equal(fallbackGpt55.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should explicitly expose xhigh thinking');
   assert.equal(fallbackGpt55.thinkingLevelMap?.minimal, 'low', 'gpt-5.5 should map minimal thinking to low like Pi 0.73 Codex');
-  assert.equal(firstRegistrations[0].config.models.some((model) => model.id.startsWith('gpt-image-')), false, 'image generation models should be hidden from fallback model selection');
+  assert.ok(firstRegistrations[0].config.models.some((model) => model.id === 'gpt-image-2'), 'fallback models should include supported gpt-image-2');
+  assert.equal(firstRegistrations[0].config.models.some((model) => model.id === 'gpt-image-1.5'), false, 'unsupported native image models should stay hidden from fallback model selection');
 
   await waitForRefresh();
   assert.equal(firstRegistrations.length, 2, 'live refresh should re-register after discovery');
-  assert.deepEqual(firstRegistrations[1].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]']);
+  assert.deepEqual(firstRegistrations[1].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]']);
   for (const id of ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]']) {
     const model = firstRegistrations[1].config.models.find((entry) => entry.id === id);
     assert.equal(model?.thinkingLevelMap?.xhigh, 'xhigh', `${id} should explicitly expose xhigh thinking`);
@@ -79,18 +84,28 @@ try {
   }
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
-  assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]']);
+  assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]']);
 
   globalThis.fetch = async () => ({ ok: false, async json() { return {}; } });
   const secondRegistrations = [];
   extension(createPi(secondRegistrations));
-  assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]']);
+  assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]']);
 
   const staleCacheTime = Date.now() + 7 * 60 * 60 * 1000;
   assert.equal(readCachedModelIds(staleCacheTime), null, 'stale cache should be ignored by default');
-  assert.deepEqual(readCachedModelIds(staleCacheTime, { allowStale: true }), ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]'], 'stale cache should be available as a startup fallback');
+  assert.deepEqual(readCachedModelIds(staleCacheTime, { allowStale: true }), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]'], 'stale cache should be available as a startup fallback');
 
-  assert.deepEqual(normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-1.5', 'gpt-5.4'], { includePinned: true }), ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]'], 'image generation models should be hidden even when returned by live discovery');
+  assert.deepEqual(
+    normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-2', 'gpt-image-1.5', 'gpt-5.4'], { includePinned: true }),
+    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]'],
+    'gpt-image-2 should be exposed while unsupported native image models stay hidden',
+  );
+
+  const gptImage2 = buildOpenAIModels(['gpt-image-2'])[0];
+  assert.equal(gptImage2.name, 'GPT Image 2');
+  assert.deepEqual(gptImage2.cost, { input: 5, output: 30, cacheRead: 2, cacheWrite: 5 });
+  assert.equal(gptImage2.contextWindow, 272000);
+  assert.equal(gptImage2.maxTokens, 65536);
 
   globalThis.fetch = async () => ({ ok: true, async json() { return { data: [{ id: 'gpt-5.5' }] }; } });
   const staleRegistrations = [];
@@ -214,6 +229,72 @@ try {
   assert.equal(restored.message.api, 'theclawbay-codex-responses');
   assert.equal(restored.message.model, 'gpt-5.4[1m]');
 
+  const oneByOnePngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
+  let imageRequest;
+  let imageAttempts = 0;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/images/generations')) {
+      imageAttempts += 1;
+      imageRequest = { url: String(url), body: JSON.parse(String(init.body)) };
+      if (imageAttempts === 1) {
+        return {
+          ok: false,
+          status: 503,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          async json() {
+            return { error: { message: 'The model service is temporarily unavailable.', code: 'service_unavailable' } };
+          },
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        async json() {
+          return { data: [{ b64_json: oneByOnePngBase64, revised_prompt: 'A tiny test PNG.' }] };
+        },
+      };
+    }
+    throw new Error(`unexpected image fetch ${url}`);
+  };
+  const imageStream = streamSimpleTheClawBayCodexResponses(
+    {
+      id: 'gpt-image-2',
+      name: 'GPT Image 2',
+      provider: 'theclawbay',
+      api: 'theclawbay-codex-responses',
+      baseUrl: 'https://api.theclawbay.com/backend-api/codex',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 5, output: 30, cacheRead: 2, cacheWrite: 5 },
+      contextWindow: 272000,
+      maxTokens: 65536,
+    },
+    { messages: [{ role: 'user', content: 'Draw a tiny test PNG.', timestamp: 0 }] },
+    { apiKey: 'test-key' },
+  );
+  const imageEvents = [];
+  for await (const event of imageStream) {
+    imageEvents.push(event);
+  }
+  assert.deepEqual(
+    imageEvents.map((event) => event.type),
+    ['start', 'text_start', 'text_delta', 'text_end', 'done'],
+    'image generation should emit the standard assistant message event sequence',
+  );
+  const imageDone = imageEvents.find((event) => event.type === 'done');
+  assert.equal(imageRequest.url, 'https://api.theclawbay.com/v1/images/generations');
+  assert.equal(imageRequest.body.model, 'gpt-image-2');
+  assert.equal(imageRequest.body.prompt, 'Draw a tiny test PNG.');
+  assert.equal(imageRequest.body.size, '1024x1024');
+  assert.equal(imageAttempts, 2, 'image generation should retry transient service failures');
+  assert.ok(imageDone, 'image generation stream should finish successfully');
+  assert.equal(imageDone.message.provider, 'theclawbay');
+  assert.equal(imageDone.message.model, 'gpt-image-2');
+  const generatedPath = imageDone.message.content[0].text.match(/`([^`]+\.png)`/)?.[1];
+  assert.ok(generatedPath, 'image generation response should include the saved PNG path');
+  assert.ok(existsSync(generatedPath), 'image generation should save the decoded PNG to disk');
+
   const streamContext = createTheClawBayStreamContext(
     {
       messages: [
@@ -274,6 +355,13 @@ try {
     process.env.PI_CLAWBAY_CACHE_DIR = originalCacheDir;
   }
 
+  if (originalImageDir === undefined) {
+    delete process.env.PI_CLAWBAY_IMAGE_DIR;
+  } else {
+    process.env.PI_CLAWBAY_IMAGE_DIR = originalImageDir;
+  }
+
   globalThis.fetch = originalFetch;
   rmSync(cacheDir, { recursive: true, force: true });
+  rmSync(imageDir, { recursive: true, force: true });
 }
