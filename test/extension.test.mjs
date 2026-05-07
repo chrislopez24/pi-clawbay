@@ -238,6 +238,29 @@ try {
     content: [{ type: 'toolCall', id: 'call_abc|fc_123', name: 'ls', arguments: {} }],
   });
   assert.equal(streamContext.messages[1].toolCallId, 'call_abc|fc_123', 'tool results should keep the original pipe-separated call id');
+
+  const switchedModelContext = createTheClawBayStreamContext(
+    {
+      messages: [
+        {
+          role: 'assistant',
+          provider: 'theclawbay',
+          api: 'theclawbay-codex-responses',
+          model: 'gpt-5.5',
+          content: [{ type: 'toolCall', id: 'call_previous|fc_previous', name: 'ls', arguments: {} }],
+        },
+      ],
+    },
+    { provider: 'theclawbay', api: 'theclawbay-codex-responses', id: 'gpt-5.4[1m]' },
+    streamModel,
+  );
+  assert.equal(switchedModelContext.messages[0].provider, 'openai-codex');
+  assert.equal(switchedModelContext.messages[0].api, 'openai-responses');
+  assert.equal(
+    switchedModelContext.messages[0].model,
+    'gpt-5.5',
+    'historical assistant messages should keep their original model so Pi handles cross-model Codex history like the official provider',
+  );
 } finally {
   if (originalApiKey === undefined) {
     delete process.env.THECLAWBAY_API_KEY;

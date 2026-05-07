@@ -84,7 +84,7 @@ export function createTheClawBayStreamContext(
 				...message,
 				api: streamModel.api,
 				provider: streamModel.provider,
-				model: streamModel.id,
+				model: resolveUpstreamModelId(message.model),
 			};
 		}),
 	};
