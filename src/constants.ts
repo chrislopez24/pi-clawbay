@@ -9,6 +9,7 @@ export const THECLAWBAY_CHATGPT_ACCOUNT_ID = "theclawbay";
 
 export const MODEL_CACHE_VERSION = 1;
 export const MODEL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+export const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 
 export const GPT_54_UPSTREAM_MODEL_ID = "gpt-5.4";
 export const GPT_54_DEFAULT_MODEL_ID = "gpt-5.4";
@@ -33,7 +34,8 @@ export const OPENAI_DEFAULT_CONTEXT_WINDOW = OPENAI_CODEX_CONTEXT_WINDOW;
 export const OPENAI_FRONTIER_CONTEXT_WINDOW = 1050000;
 export const OPENAI_DEFAULT_MAX_TOKENS = 128000;
 
-export const PINNED_MODEL_IDS = ["gpt-image-1.5", "gpt-image-2.0"];
+export const HIDDEN_MODEL_ID_PREFIXES = ["gpt-image-"] as const;
+export const PINNED_MODEL_IDS: string[] = [];
 export const FALLBACK_OPENAI_MODEL_IDS = [
 	"gpt-5.5",
 	GPT_54_DEFAULT_MODEL_ID,
@@ -44,5 +46,4 @@ export const FALLBACK_OPENAI_MODEL_IDS = [
 	"gpt-5.2",
 	"gpt-5.1-codex-max",
 	"gpt-5.1-codex-mini",
-	...PINNED_MODEL_IDS,
 ];

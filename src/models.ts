@@ -1,6 +1,7 @@
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import {
 	FALLBACK_OPENAI_MODEL_IDS,
+	HIDDEN_MODEL_ID_PREFIXES,
 	GPT_54_1M_MODEL_ID,
 	GPT_54_DEFAULT_MODEL_ID,
 	GPT_54_UPSTREAM_MODEL_ID,
@@ -67,7 +68,7 @@ function isGpt54Or55Model(id: string): boolean {
 }
 
 function isImageGenerationModel(id: string): boolean {
-	return id.startsWith("gpt-image-");
+	return HIDDEN_MODEL_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
 }
 
 function createModelConfig(
@@ -119,7 +120,7 @@ export function normalizeOpenAIModelIds(ids: string[], options?: { includePinned
 }
 
 function normalizeOpenAIModelId(id: string): string[] {
-	if (id.startsWith("claude-") || id === "gpt-5.4-pro") {
+	if (id.startsWith("claude-") || id === "gpt-5.4-pro" || isImageGenerationModel(id)) {
 		return [];
 	}
 

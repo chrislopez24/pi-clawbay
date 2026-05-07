@@ -15,7 +15,7 @@ export interface QuotaWindow {
 	requestCount?: number;
 	estimatedCostUsdUsed?: number | null;
 	costUsdLimit?: number | null;
-	percentUsed: number;
+	percentUsed?: number;
 	limitReached?: boolean;
 }
 

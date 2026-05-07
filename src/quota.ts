@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { THECLAWBAY_QUOTA_URL } from "./constants.js";
 import type { QuotaResponse, QuotaWindow } from "./types.js";
 
@@ -55,7 +55,7 @@ function formatDuration(seconds?: number): string {
 }
 
 function formatQuotaDetails(label: string, window?: QuotaWindow): string {
-	if (!window) {
+	if (!window || typeof window.percentUsed !== "number" || !Number.isFinite(window.percentUsed)) {
 		return `${label}: N/A`;
 	}
 
@@ -68,10 +68,23 @@ function formatQuotaDetails(label: string, window?: QuotaWindow): string {
 	return `${label}: ${usage} • ${window.requestCount ?? 0} req • resets ${formatDuration(window.secondsUntilReset)}`;
 }
 
+function getQuotaLevel(quota: QuotaResponse): "info" | "warning" {
+	const { fiveHour, weekly } = getQuotaWindows(quota);
+	return quota.anyLimitReached || quota.fiveHourLimitReached || quota.weeklyLimitReached || fiveHour?.limitReached || weekly?.limitReached
+		? "warning"
+		: "info";
+}
+
+function formatQuotaMessage(quota: QuotaResponse): string {
+	const { fiveHour, weekly } = getQuotaWindows(quota);
+	const details = `${formatQuotaDetails("5h", fiveHour)} | ${formatQuotaDetails("Week", weekly)}`;
+	return quota.usageLimitPresentation ? `${quota.usageLimitPresentation} | ${details}` : details;
+}
+
 export function registerQuotaCommand(pi: ExtensionAPI): void {
-	pi.registerCommand("quota", {
+	const command = {
 		description: "Check TheClawBay quota usage",
-		handler: async (_args, ctx) => {
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			const currentApiKey = getApiKey();
 			if (!currentApiKey) {
 				ctx.ui.notify("THECLAWBAY_API_KEY is not set", "error");
@@ -84,8 +97,10 @@ export function registerQuotaCommand(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const { fiveHour, weekly } = getQuotaWindows(quota);
-			ctx.ui.notify(`${formatQuotaDetails("5h", fiveHour)} | ${formatQuotaDetails("Week", weekly)}`, "info");
+			ctx.ui.notify(formatQuotaMessage(quota), getQuotaLevel(quota));
 		},
-	});
+	};
+
+	pi.registerCommand("quota", command);
+	pi.registerCommand("clawbay-quota", command);
 }

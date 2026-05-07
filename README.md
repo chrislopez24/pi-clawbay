@@ -54,7 +54,7 @@ Model IDs are discovered dynamically at extension load from:
 
 - `GET https://api.theclawbay.com/v1/models`
 
-If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to the last successful discovery cache, then to a bundled default list so `/model` still works on startup. Live discovery refreshes the cache in the background after the provider has been registered.
+If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to the last successful discovery cache, even if it is stale, then to a bundled default list so `/model` still works on startup. Live discovery refreshes the cache in the background after the provider has been registered.
 
 Requests for `theclawbay/*` models are sent through TheClawBay's native Codex route:
 
@@ -97,7 +97,7 @@ Why split it?
 
 - `gpt-5.4` is configured with a `272,000` token context window.
 - `gpt-5.4[1m]` is configured with a `1,050,000` token context window.
-- Current non-5.4 GPT-5/Codex variants default to `400,000` context and `128,000` max output tokens.
+- Current non-5.4 GPT-5/Codex variants default to `272,000` context and `128,000` max output tokens.
 
 ### Example Model List
 
@@ -112,6 +112,8 @@ Current fallback list in this package:
 - `gpt-5.2`
 - `gpt-5.1-codex-max`
 - `gpt-5.1-codex-mini`
+
+Image-generation models returned by discovery, such as `gpt-image-*`, are intentionally hidden from `/model` until this extension has a dedicated, tested image-generation flow.
 
 ## Usage
 
@@ -131,7 +133,11 @@ This extension currently registers:
 
 ```text
 /quota
+/clawbay-quota
+/clawbay-refresh-models
 ```
+
+`/quota` and `/clawbay-quota` show current usage. `/clawbay-refresh-models` refreshes live model discovery, updates the local cache, and re-registers the provider without needing `/reload`.
 
 `/cachehit` was removed.
 
@@ -185,6 +191,35 @@ Common error codes:
 | `5h_cost_limit_reached` | 5-hour spend cap hit |
 | `invalid_api_key` | Key missing or malformed |
 | `model_not_found` | Requested model unavailable |
+
+## Debugging and Verification
+
+Enable extension debug logs with:
+
+```bash
+PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gpt-5.4 --thinking low -p "Respond with OK only."
+```
+
+Useful smoke checks:
+
+```bash
+# Model registration and hidden image models
+PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --list-models theclawbay
+
+# Basic reasoning/cache path
+PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gpt-5.4 --thinking low --no-session -p "Say OK and nothing else."
+
+# Tool-call path
+PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gpt-5.4 --thinking low --tools ls -p "Use the ls tool on the current directory, then summarize whether package.json exists."
+```
+
+## Troubleshooting
+
+- `THECLAWBAY_API_KEY is not set`: export a valid key before selecting `theclawbay/*` models.
+- `401` or `invalid_api_key`: verify the key in the TheClawBay dashboard and in your shell environment.
+- `429`, `weekly_cost_limit_reached`, or `5h_cost_limit_reached`: run `/quota` or `/clawbay-quota` and wait for the reset window.
+- Model missing from `/model`: run `/clawbay-refresh-models`; if discovery still omits it, TheClawBay may not expose it for your account.
+- `gpt-image-*` missing: image-generation models are intentionally hidden until this extension has a dedicated tested image flow.
 
 ## Building
 

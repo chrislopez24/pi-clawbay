@@ -18,9 +18,15 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadProviderModels, refreshProviderModels } from "./model-cache.js";
+import { loadProviderModels, refreshProviderModels, registerModelRefreshCommand } from "./model-cache.js";
 import { registerProviders } from "./provider.js";
 import { getApiKey, registerQuotaCommand } from "./quota.js";
+
+function debugLog(message: string): void {
+	if (process.env.PI_CLAWBAY_DEBUG === "1") {
+		console.info(`[theclawbay:debug] ${message}`);
+	}
+}
 
 function warnMissingApiKey(): void {
 	console.warn(
@@ -38,7 +44,8 @@ export default function (pi: ExtensionAPI): void {
 		warnMissingApiKey();
 	}
 
-	const { models } = loadProviderModels();
+	const { models, source } = loadProviderModels();
+	debugLog(`Registering ${models.length} model(s) from ${source}.`);
 	registerProviders(pi, models);
 
 	if (apiKey) {
@@ -46,4 +53,5 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	registerQuotaCommand(pi);
+	registerModelRefreshCommand(pi, getApiKey);
 }
