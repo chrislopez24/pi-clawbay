@@ -1,36 +1,44 @@
 # TheClawBay Provider for Pi Coding Agent
 
-`pi-clawbay` is a Pi Coding Agent provider extension for [TheClawBay](https://theclawbay.com). It exposes TheClawBay GPT/Codex models through Pi and includes image generation support through both Codex-style hosted tools and the direct Images API.
+A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi) that enables access to GPT-5 and Codex models through [TheClawBay](https://theclawbay.com) API.
 
 ## Features
 
-- **Single Pi provider:** registers `theclawbay`.
-- **Codex Responses transport:** sends requests to TheClawBay's native Codex route over HTTP streaming.
-- **Dynamic model discovery:** loads model IDs from TheClawBay's `/v1/models` endpoint and caches successful discovery results.
-- **GPT-5.4 variants:** exposes `gpt-5.4` and `gpt-5.4[1m]` as separate Pi selections while remapping both to the upstream `gpt-5.4` model ID.
-- **Hosted image generation:** Codex-style `image_generation` hosted tool support exposed as a model tool; the model decides when to call it with `tool_choice: auto`.
-- **Direct Images API transport:** manual `gpt-image-2` and `gpt-image-1.5` selections call TheClawBay's documented `/v1/images/generations` endpoint and save returned PNGs locally.
-- **Quota command:** adds `/quota` for current TheClawBay usage information.
+- **GPT-5 & Codex Models** - Access via Codex Responses API with session-based prompt cache
+- **Single Provider** - Only `theclawbay` is registered
+- **GPT-5.4 Split Options** - `gpt-5.4` and `gpt-5.4[1m]` for clearer cost/context choice
+- **High Usage Headroom** - More capacity than standard subscriptions
+- **Simple Setup** - Single API key
 
 ## Installation
 
-### Recommended: npm
+### Recommended: Install from npm
 
 ```bash
 pi install npm:pi-clawbay@latest
 ```
 
-Use the npm package form above. Do not install `npm:chrislopez24/pi-clawbay`; npm treats that as a GitHub-style dependency and it can leave broken global symlinks.
+This uses the published npm package and avoids npm's GitHub dependency path.
 
-### Local development
+Do not use:
+
+```bash
+pi install npm:chrislopez24/pi-clawbay
+```
+
+That form is treated as a GitHub install, not a registry package install, and it can leave broken global symlinks behind.
+
+### Local Development
 
 ```bash
 pi -e /path/to/pi-clawbay
 ```
 
-Use local loading only while developing or testing this extension.
+Use this only while actively developing the extension locally.
 
 ## Configuration
+
+### Environment Variable
 
 Set your TheClawBay API key:
 
@@ -38,40 +46,62 @@ Set your TheClawBay API key:
 export THECLAWBAY_API_KEY=your-api-key-here
 ```
 
-Get an API key from the [TheClawBay Dashboard](https://theclawbay.com).
+Get your API key from [TheClawBay Dashboard](https://theclawbay.com).
 
-## Provider transport
+### Available Models
 
-The provider sends `theclawbay/*` requests to TheClawBay's native Codex route:
+Model IDs are discovered dynamically at extension load from:
 
-```text
-https://api.theclawbay.com/backend-api/codex
-```
+- `GET https://api.theclawbay.com/v1/models`
 
-The extension uses a custom HTTP streaming Responses transport. It sends:
+If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to the last successful discovery cache, then to a bundled default list so `/model` still works on startup. Live discovery refreshes the cache in the background after the provider has been registered.
+
+Requests for `theclawbay/*` models are sent through TheClawBay's native Codex route:
+
+- `https://api.theclawbay.com/backend-api/codex`
+
+This extension uses a custom Responses transport for that route. It sends:
 
 - `Authorization: Bearer $THECLAWBAY_API_KEY`
 - `chatgpt-account-id: theclawbay`
-- `originator: pi`
-- `OpenAI-Beta: responses=experimental`
-- `session_id` when Pi provides a session ID
+- `session_id` when Pi provides a session id
 - `prompt_cache_key` in the request body
 
-It intentionally does not use Pi's built-in Codex WebSocket transport. That path expects ChatGPT/Codex JWT-style credentials and can fail with normal TheClawBay API keys.
+This avoids Pi's built-in `openai-codex-responses` JWT parsing path, which expects a ChatGPT/Codex-style token and can fail with `Failed to extract accountId from token` when given a normal TheClawBay API key.
 
-## Model discovery and filtering
+Based on the live docs at `https://theclawbay.com/docs`:
 
-At startup, the extension calls:
+- OpenAI-compatible apps use `https://api.theclawbay.com/v1`
+- Native Codex config uses `https://api.theclawbay.com/backend-api/codex`
+- The docs recommend calling `/models` first and selecting an available model dynamically
 
-```text
-GET https://api.theclawbay.com/v1/models
-```
+### GPT-5.4 Variants In This Extension
 
-If live discovery fails, it falls back to the last successful cache and then to the bundled default list.
+The live TheClawBay docs expose `gpt-5.4` as the upstream model. This extension presents it in Pi as two selectable entries:
 
-Selectable Pi models include GPT/Codex text models plus two explicit image-only entries, `gpt-image-2` and `gpt-image-1.5`. The image entries are selectable manually, but they do not use the chat/Codex transport; they route directly to TheClawBay's Images API.
+- `theclawbay/gpt-5.4` → standard variant, capped to `272k` context in Pi
+- `theclawbay/gpt-5.4[1m]` → long-context variant, configured to `1,050,000`
 
-### Default fallback models
+Internally:
+
+- `gpt-5.4` stays as-is
+- `gpt-5.4[1m]` is remapped to upstream `gpt-5.4` before the request is sent
+
+Why split it?
+
+- `gpt-5.4` is the cheaper/default option
+- `gpt-5.4[1m]` gives explicit access to long context
+- both end up using the same official upstream model id from TheClawBay
+
+### Model Limits
+
+- `gpt-5.4` is configured with a `272,000` token context window.
+- `gpt-5.4[1m]` is configured with a `1,050,000` token context window.
+- Current non-5.4 GPT-5/Codex variants default to `400,000` context and `128,000` max output tokens.
+
+### Example Model List
+
+Current fallback list in this package:
 
 - `gpt-5.5`
 - `gpt-5.4`
@@ -82,144 +112,12 @@ Selectable Pi models include GPT/Codex text models plus two explicit image-only 
 - `gpt-5.2`
 - `gpt-5.1-codex-max`
 - `gpt-5.1-codex-mini`
-- `gpt-image-2`
-- `gpt-image-1.5`
-
-### GPT-5.4 variants
-
-The upstream TheClawBay model ID is `gpt-5.4`. This extension exposes two Pi entries for clearer cost/context selection:
-
-| Pi model | Upstream model | Context configured in Pi |
-|----------|----------------|--------------------------|
-| `theclawbay/gpt-5.4` | `gpt-5.4` | `272,000` tokens |
-| `theclawbay/gpt-5.4[1m]` | `gpt-5.4` | `1,050,000` tokens |
-
-Other GPT/Codex fallback models use a `272,000` token context window and `128,000` max output tokens.
-
-## Image generation
-
-`pi-clawbay` supports two image-generation flows. Prefer the Codex-style hosted tool from a text/Codex model; select a `gpt-image-*` model only when you explicitly want the direct Images API transport documented at <https://theclawbay.com/docs#image-generation>.
-
-The provider follows Codex CLI's hosted-tool pattern: for image-capable TheClawBay models, it exposes the hosted `image_generation` tool in the Responses payload and lets the model decide when to call it with `tool_choice: auto`. Normal coding and text requests still return regular assistant text; they do not produce an `image_generation_call` unless the model intentionally uses the hosted tool.
-
-Select a text/Codex model, for example:
-
-```text
-/model theclawbay/gpt-5.5
-```
-
-Ask for an image naturally:
-
-```text
-Generate a minimalist black sailboat icon on a white background. No text.
-```
-
-The hosted Responses tool definition is:
-
-```json
-{ "type": "image_generation", "output_format": "png" }
-```
-
-The stream parser handles `image_generation_call` items, decodes the returned base64 PNG, and saves it to:
-
-```text
-~/.pi/agent/generated_images/<session_id>/<image_generation_call_id>.png
-```
-
-The assistant response includes:
-
-- a `file://` URL
-- the filesystem path
-- the revised prompt, when returned by TheClawBay
-
-### Environment controls
-
-To disable hosted image generation entirely, use:
-
-```bash
-export PI_CLAWBAY_IMAGE_GENERATION=off
-```
-
-Override the output root when needed:
-
-```bash
-export PI_CLAWBAY_GENERATED_IMAGES_DIR=/absolute/output/dir
-```
-
-### Manual Direct Images API flow
-
-For explicit direct Images API usage, select one of the image models:
-
-```text
-/model theclawbay/gpt-image-2
-/model theclawbay/gpt-image-1.5
-```
-
-These models are not sent through the Codex chat endpoint. `streamSimple` calls:
-
-```text
-POST https://api.theclawbay.com/v1/images/generations
-```
-
-with the documented payload shape:
-
-```json
-{
-  "model": "gpt-image-2",
-  "prompt": "A minimalist black sailboat icon on a white background. No text.",
-  "size": "1024x1024",
-  "quality": "low",
-  "output_format": "png"
-}
-```
-
-The provider decodes `data[0].b64_json`, saves a PNG under `~/.pi/agent/generated_images/<session_id>/`, and returns the `file://` URL, path, and `revised_prompt` when present.
-
-The valid TheClawBay image model IDs exposed here are `gpt-image-2` and `gpt-image-1.5`. `gpt-image-2.0` is not a valid model ID.
-
-### Skill guidance
-
-This package includes a Pi skill:
-
-```text
-theclawbay-imagegen
-```
-
-The skill documents the recommended image-generation workflow and fallback behavior. It is helpful guidance for the agent, but it is not a separate runtime requirement. The provider stream implements the actual hosted image generation support.
-
-If needed, load it explicitly inside Pi:
-
-```text
-/skill:theclawbay-imagegen
-```
-
-### Direct Images API outside Pi
-
-For programmatic image generation outside the Pi provider loop, call TheClawBay's OpenAI-compatible Images API directly:
-
-```http
-POST https://api.theclawbay.com/v1/images/generations
-Authorization: Bearer $THECLAWBAY_API_KEY
-Content-Type: application/json
-```
-
-Example payload:
-
-```json
-{
-  "model": "gpt-image-2",
-  "prompt": "A minimalist black sailboat icon on a white background. No text.",
-  "size": "1024x1024",
-  "quality": "low",
-  "output_format": "png"
-}
-```
-
-Use the direct API outside Pi only when you need your own programmatic integration or when hosted generation is unavailable. Inside Pi, selecting `theclawbay/gpt-image-2` or `theclawbay/gpt-image-1.5` uses this same endpoint automatically.
 
 ## Usage
 
-### Select a model
+### Select a Model
+
+Use `/model` command in pi:
 
 ```text
 /model theclawbay/gpt-5.5
@@ -229,55 +127,85 @@ Use the direct API outside Pi only when you need your own programmatic integrati
 
 ### Commands
 
+This extension currently registers:
+
 ```text
 /quota
 ```
 
-`/quota` shows current TheClawBay usage windows and reset times.
+`/cachehit` was removed.
 
-## API reference
+### Programmatic Usage
 
-| Provider | Base URL | API type |
-|----------|----------|----------|
-| `theclawbay` | `https://api.theclawbay.com/backend-api/codex` | Responses over HTTP streaming |
+```typescript
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-All provider requests use Bearer token authentication:
-
-```text
-Authorization: Bearer $THECLAWBAY_API_KEY
+export default function (pi: ExtensionAPI) {
+  // After loading this extension, models are available:
+  // - theclawbay/gpt-5.5
+  // - theclawbay/gpt-5.4
+  // - theclawbay/gpt-5.4[1m]
+  // - theclawbay/gpt-5.4-mini
+  // - theclawbay/gpt-5.3-codex
+}
 ```
 
-Quota endpoint:
+## API Reference
+
+### Endpoints
+
+| Provider | Base URL | API Type |
+|----------|----------|----------|
+| `theclawbay` | `https://api.theclawbay.com/backend-api/codex` | OpenAI Codex Responses |
+
+### Authentication
+
+All requests use Bearer token authentication:
+
+```text
+Authorization: Bearer THECLAWBAY_API_KEY
+```
+
+### Quota Checking
+
+Check your current usage:
 
 ```bash
 curl "https://theclawbay.com/api/codex-auth/v1/quota" \
   -H "Authorization: Bearer $THECLAWBAY_API_KEY"
 ```
 
-## Build and test
+## Error Handling
+
+Common error codes:
+
+| Code | Description |
+|------|-------------|
+| `weekly_cost_limit_reached` | Weekly spend cap hit |
+| `5h_cost_limit_reached` | 5-hour spend cap hit |
+| `invalid_api_key` | Key missing or malformed |
+| `model_not_found` | Requested model unavailable |
+
+## Building
 
 ```bash
 npm install
-npm run check
-npm test
+npm run build
 npm pack --dry-run
 ```
 
 ## Publishing
 
-Publishing is handled by the GitHub Actions workflow in `.github/workflows/publish.yml`.
-
-Manual local publishing is not recommended. Use the workflow so npm provenance is attached:
-
 ```bash
-gh workflow run publish.yml --ref main
+npm version patch
+npm publish
 ```
 
 ## Resources
 
 - [TheClawBay Docs](https://theclawbay.com/docs)
 - [TheClawBay Dashboard](https://theclawbay.com)
-- [Pi Custom Provider Docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/custom-provider.md)
+- [Pi Custom Provider Docs](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/custom-provider.md)
 
 ## License
 
