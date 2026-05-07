@@ -40,6 +40,7 @@ import type { ExtensionAPI, ProviderModelConfig } from "@mariozechner/pi-coding-
 
 const THECLAWBAY_OPENAI_DISCOVERY_BASE_URL = "https://api.theclawbay.com/v1";
 const THECLAWBAY_CODEX_BASE_URL = "https://api.theclawbay.com/backend-api/codex";
+const THECLAWBAY_IMAGES_GENERATIONS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/images/generations`;
 const THECLAWBAY_QUOTA_URL = "https://theclawbay.com/api/codex-auth/v1/quota";
 const THECLAWBAY_OPENAI_MODELS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/models`;
 const THECLAWBAY_CODEX_API = "theclawbay-codex-responses";
@@ -47,6 +48,7 @@ const THECLAWBAY_CHATGPT_ACCOUNT_ID = "theclawbay";
 const IMAGE_GENERATION_ENV = "PI_CLAWBAY_IMAGE_GENERATION";
 const GENERATED_IMAGES_DIR_ENV = "PI_CLAWBAY_GENERATED_IMAGES_DIR";
 const HOSTED_IMAGE_GENERATION_TOOL = { type: "image_generation", output_format: "png" } as const;
+const IMAGE_GENERATION_DISABLED_MODES = new Set(["off", "false", "0", "disabled"]);
 const MODEL_CACHE_VERSION = 1;
 const MODEL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -72,6 +74,9 @@ const OPENAI_CODEX_CONTEXT_WINDOW = 272000;
 const OPENAI_DEFAULT_CONTEXT_WINDOW = OPENAI_CODEX_CONTEXT_WINDOW;
 const OPENAI_FRONTIER_CONTEXT_WINDOW = 1050000;
 const OPENAI_DEFAULT_MAX_TOKENS = 128000;
+
+const IMAGE_GENERATION_MODEL_IDS = ["gpt-image-2", "gpt-image-1.5"];
+const IMAGE_GENERATION_MODEL_ID_SET = new Set(IMAGE_GENERATION_MODEL_IDS);
 
 const FALLBACK_OPENAI_MODEL_IDS = [
 	"gpt-5.5",
@@ -168,7 +173,7 @@ function isGpt54Or55Model(id: string): boolean {
 }
 
 function isImageGenerationModel(id: string): boolean {
-	return id.startsWith("gpt-image-");
+	return IMAGE_GENERATION_MODEL_ID_SET.has(id);
 }
 
 function createModelConfig(
@@ -195,6 +200,10 @@ function createModelConfig(
 function createOpenAIModel(id: string): ProviderModelConfig {
 	const cost = OPENAI_KNOWN_COSTS[id] ?? ZERO_COST;
 
+	if (isImageGenerationModel(id)) {
+		return createModelConfig(id, formatOpenAIModelName(id), cost, 8192, 4096);
+	}
+
 	if (id === GPT_54_DEFAULT_MODEL_ID) {
 		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_CODEX_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
 	}
@@ -207,7 +216,7 @@ function createOpenAIModel(id: string): ProviderModelConfig {
 }
 
 function buildOpenAIModels(ids: string[]): ProviderModelConfig[] {
-	return dedupeIds(ids).filter((id) => !isImageGenerationModel(id)).map((id) => createOpenAIModel(id));
+	return dedupeIds([...ids, ...IMAGE_GENERATION_MODEL_IDS]).map((id) => createOpenAIModel(id));
 }
 
 function buildFallbackOpenAIModels(): ProviderModelConfig[] {
@@ -217,7 +226,11 @@ function buildFallbackOpenAIModels(): ProviderModelConfig[] {
 function normalizeOpenAIModelIds(ids: string[]): string[] {
 	return dedupeIds(
 		ids.flatMap((id) => {
-			if (id.startsWith("claude-") || isImageGenerationModel(id)) {
+			if (id.startsWith("claude-")) {
+				return [];
+			}
+
+			if (id.startsWith("gpt-image-") && !isImageGenerationModel(id)) {
 				return [];
 			}
 
@@ -252,8 +265,17 @@ function buildTheClawBayHeaders(options?: SimpleStreamOptions): Record<string, s
 	};
 }
 
-function isHostedImageGenerationEnabled(): boolean {
-	return process.env[IMAGE_GENERATION_ENV]?.trim().toLowerCase() === "hosted";
+function getHostedImageGenerationMode(): string | undefined {
+	return process.env[IMAGE_GENERATION_ENV]?.trim().toLowerCase();
+}
+
+function isHostedImageGenerationDisabled(): boolean {
+	const mode = getHostedImageGenerationMode();
+	return mode !== undefined && IMAGE_GENERATION_DISABLED_MODES.has(mode);
+}
+
+function shouldExposeHostedImageGenerationTool(model: Model<"openai-responses">): boolean {
+	return !isHostedImageGenerationDisabled() && model.input.includes("image");
 }
 
 function appendHostedImageGenerationTool(tools: unknown): unknown[] {
@@ -440,15 +462,13 @@ function buildHostedImageGenerationPayload(
 		body.max_output_tokens = options.maxTokens;
 	}
 
-	if (model.reasoning) {
-		const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
+	if (model.reasoning && options?.reasoning) {
+		const clampedReasoning = clampThinkingLevel(model, options.reasoning);
 		if (clampedReasoning && clampedReasoning !== "off") {
 			body.reasoning = {
 				effort: model.thinkingLevelMap?.[clampedReasoning] ?? clampedReasoning,
 				summary: "auto",
 			};
-		} else if (model.thinkingLevelMap?.off !== null) {
-			body.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
 		}
 	}
 
@@ -793,6 +813,128 @@ function streamHostedImageGenerationTheClawBayCodexResponses(
 	return stream;
 }
 
+function getLatestUserPrompt(context: Context): string {
+	for (let index = context.messages.length - 1; index >= 0; index--) {
+		const message = context.messages[index];
+		if (message.role !== "user") continue;
+		if (typeof message.content === "string") return message.content;
+		return message.content.filter((item) => item.type === "text").map((item) => item.text).join("\n").trim();
+	}
+	return "";
+}
+
+async function readResponseBody(response: Response): Promise<string> {
+	try {
+		return await response.text();
+	} catch (error) {
+		return `Unable to read error body: ${error instanceof Error ? error.message : String(error)}`;
+	}
+}
+
+function describeFetchCause(error: Error): string | undefined {
+	const cause = (error as { cause?: unknown }).cause;
+	if (!cause) return undefined;
+	if (cause instanceof Error) return cause.message;
+	return String(cause);
+}
+
+function formatDirectImageGenerationError(error: unknown, modelId: string, status?: number, body?: string): string {
+	const parts = [`TheClawBay Images API request failed`, `endpoint=${THECLAWBAY_IMAGES_GENERATIONS_URL}`, `model=${modelId}`];
+	if (status !== undefined) parts.push(`status=${status}`);
+	if (body) parts.push(`body=${body}`);
+	if (error instanceof Error) {
+		parts.push(`message=${error.message}`);
+		const cause = describeFetchCause(error);
+		if (cause) parts.push(`cause=${cause}`);
+	} else if (error !== undefined) {
+		parts.push(`message=${String(error)}`);
+	}
+	return parts.join("; ");
+}
+
+function streamDirectTheClawBayImageGeneration(
+	model: Model<"openai-responses">,
+	context: Context,
+	options?: SimpleStreamOptions
+): AssistantMessageEventStream {
+	const stream = createAssistantMessageEventStream();
+
+	void (async () => {
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+
+		try {
+			const apiKey = options?.apiKey || process.env.THECLAWBAY_API_KEY;
+			if (!apiKey) throw new Error("No API key for provider: theclawbay");
+
+			const prompt = getLatestUserPrompt(context);
+			if (!prompt) throw new Error("Image generation requires a text prompt");
+
+			let response: Response;
+			try {
+				response = await fetch(THECLAWBAY_IMAGES_GENERATIONS_URL, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${apiKey}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						model: model.id,
+						prompt,
+						size: "1024x1024",
+						quality: "low",
+						output_format: "png",
+					}),
+					signal: options?.signal,
+				});
+			} catch (error) {
+				throw new Error(formatDirectImageGenerationError(error, model.id));
+			}
+
+			await options?.onResponse?.(
+				{ status: response.status, headers: Object.fromEntries(response.headers.entries()) },
+				model
+			);
+			if (!response.ok) {
+				const body = await readResponseBody(response);
+				throw new Error(formatDirectImageGenerationError(undefined, model.id, response.status, body));
+			}
+
+			const result = (await response.json()) as { data?: Array<{ b64_json?: string; revised_prompt?: string }> };
+			const image = result.data?.find((item) => typeof item.b64_json === "string");
+			if (!image?.b64_json) throw new Error("TheClawBay image generation response did not include b64_json");
+
+			stream.push({ type: "start", partial: output });
+			const filePath = saveImageGenerationResult(options?.sessionId, `${model.id}-${Date.now()}`, image.b64_json);
+			pushGeneratedImageText(stream, output, filePath, image.revised_prompt);
+			stream.push({ type: "done", reason: "stop", message: output });
+			stream.end();
+		} catch (error) {
+			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+			output.errorMessage = error instanceof Error ? error.message : String(error);
+			stream.push({ type: "error", reason: output.stopReason, error: output });
+			stream.end();
+		}
+	})();
+
+	return stream;
+}
+
 function streamSimpleTheClawBayCodexResponses(
 	model: unknown,
 	context: unknown,
@@ -808,23 +950,27 @@ function streamSimpleTheClawBayCodexResponses(
 		id: resolveUpstreamModelId(typedModel.id),
 	} as Model<"openai-responses">;
 
-	if (isHostedImageGenerationEnabled()) {
-		return streamHostedImageGenerationTheClawBayCodexResponses(remappedModel, typedContext, {
+	if (isImageGenerationModel(remappedModel.id)) {
+		return streamDirectTheClawBayImageGeneration(remappedModel, typedContext, typedOptions);
+	}
+
+	if (!shouldExposeHostedImageGenerationTool(remappedModel)) {
+		return streamSimpleOpenAIResponses(remappedModel, typedContext, {
 			...typedOptions,
 			headers,
 			onPayload: async (payload, streamModel) => {
-				const transformedPayload = buildTheClawBayPayload(payload, typedContext, { includeHostedImageGeneration: true });
+				const transformedPayload = buildTheClawBayPayload(payload, typedContext);
 				const nextPayload = await originalOnPayload?.(transformedPayload, streamModel);
 				return nextPayload === undefined ? transformedPayload : nextPayload;
 			},
 		});
 	}
 
-	return streamSimpleOpenAIResponses(remappedModel, typedContext, {
+	return streamHostedImageGenerationTheClawBayCodexResponses(remappedModel, typedContext, {
 		...typedOptions,
 		headers,
 		onPayload: async (payload, streamModel) => {
-			const transformedPayload = buildTheClawBayPayload(payload, typedContext);
+			const transformedPayload = buildTheClawBayPayload(payload, typedContext, { includeHostedImageGeneration: true });
 			const nextPayload = await originalOnPayload?.(transformedPayload, streamModel);
 			return nextPayload === undefined ? transformedPayload : nextPayload;
 		},

@@ -1,6 +1,6 @@
 # TheClawBay Provider for Pi Coding Agent
 
-`pi-clawbay` is a Pi Coding Agent provider extension for [TheClawBay](https://theclawbay.com). It exposes TheClawBay GPT/Codex models through Pi and includes experimental Codex-style hosted image generation support.
+`pi-clawbay` is a Pi Coding Agent provider extension for [TheClawBay](https://theclawbay.com). It exposes TheClawBay GPT/Codex models through Pi and includes image generation support through both Codex-style hosted tools and the direct Images API.
 
 ## Features
 
@@ -8,7 +8,8 @@
 - **Codex Responses transport:** sends requests to TheClawBay's native Codex route over HTTP streaming.
 - **Dynamic model discovery:** loads model IDs from TheClawBay's `/v1/models` endpoint and caches successful discovery results.
 - **GPT-5.4 variants:** exposes `gpt-5.4` and `gpt-5.4[1m]` as separate Pi selections while remapping both to the upstream `gpt-5.4` model ID.
-- **Hosted image generation:** optional Codex-style `image_generation` hosted tool support behind an explicit feature flag.
+- **Hosted image generation:** Codex-style `image_generation` hosted tool support exposed as a model tool; the model decides when to call it with `tool_choice: auto`.
+- **Direct Images API transport:** manual `gpt-image-2` and `gpt-image-1.5` selections call TheClawBay's documented `/v1/images/generations` endpoint and save returned PNGs locally.
 - **Quota command:** adds `/quota` for current TheClawBay usage information.
 
 ## Installation
@@ -68,7 +69,7 @@ GET https://api.theclawbay.com/v1/models
 
 If live discovery fails, it falls back to the last successful cache and then to the bundled default list.
 
-Selectable Pi chat models are filtered to GPT/Codex-compatible models. Image API models such as `gpt-image-2` and `gpt-image-1.5` are intentionally not exposed in `/model`; they are image-generation API models, not chat/Codex models.
+Selectable Pi models include GPT/Codex text models plus two explicit image-only entries, `gpt-image-2` and `gpt-image-1.5`. The image entries are selectable manually, but they do not use the chat/Codex transport; they route directly to TheClawBay's Images API.
 
 ### Default fallback models
 
@@ -81,6 +82,8 @@ Selectable Pi chat models are filtered to GPT/Codex-compatible models. Image API
 - `gpt-5.2`
 - `gpt-5.1-codex-max`
 - `gpt-5.1-codex-mini`
+- `gpt-image-2`
+- `gpt-image-1.5`
 
 ### GPT-5.4 variants
 
@@ -95,15 +98,11 @@ Other GPT/Codex fallback models use a `272,000` token context window and `128,00
 
 ## Image generation
 
-`pi-clawbay` supports experimental hosted image generation in the Codex style used by OpenAI Codex CLI.
+`pi-clawbay` supports two image-generation flows. Prefer the Codex-style hosted tool from a text/Codex model; select a `gpt-image-*` model only when you explicitly want the direct Images API transport documented at <https://theclawbay.com/docs#image-generation>.
 
-Enable it explicitly:
+The provider follows Codex CLI's hosted-tool pattern: for image-capable TheClawBay models, it exposes the hosted `image_generation` tool in the Responses payload and lets the model decide when to call it with `tool_choice: auto`. Normal coding and text requests still return regular assistant text; they do not produce an `image_generation_call` unless the model intentionally uses the hosted tool.
 
-```bash
-export PI_CLAWBAY_IMAGE_GENERATION=hosted
-```
-
-Then select a text/Codex model, for example:
+Select a text/Codex model, for example:
 
 ```text
 /model theclawbay/gpt-5.5
@@ -115,7 +114,7 @@ Ask for an image naturally:
 Generate a minimalist black sailboat icon on a white background. No text.
 ```
 
-When the feature flag is enabled, the provider adds the hosted Responses tool:
+The hosted Responses tool definition is:
 
 ```json
 { "type": "image_generation", "output_format": "png" }
@@ -133,21 +132,50 @@ The assistant response includes:
 - the filesystem path
 - the revised prompt, when returned by TheClawBay
 
-For tests or automation, override the output root:
+### Environment controls
+
+To disable hosted image generation entirely, use:
+
+```bash
+export PI_CLAWBAY_IMAGE_GENERATION=off
+```
+
+Override the output root when needed:
 
 ```bash
 export PI_CLAWBAY_GENERATED_IMAGES_DIR=/absolute/output/dir
 ```
 
-### Image model IDs
+### Manual Direct Images API flow
 
-The current TheClawBay image model ID is:
+For explicit direct Images API usage, select one of the image models:
 
 ```text
-gpt-image-2
+/model theclawbay/gpt-image-2
+/model theclawbay/gpt-image-1.5
 ```
 
-It is not `gpt-image-2.0`. The extension keeps `gpt-image-*` out of the Pi chat model list. Hosted image generation is invoked from a text/Codex model through the `image_generation` hosted tool.
+These models are not sent through the Codex chat endpoint. `streamSimple` calls:
+
+```text
+POST https://api.theclawbay.com/v1/images/generations
+```
+
+with the documented payload shape:
+
+```json
+{
+  "model": "gpt-image-2",
+  "prompt": "A minimalist black sailboat icon on a white background. No text.",
+  "size": "1024x1024",
+  "quality": "low",
+  "output_format": "png"
+}
+```
+
+The provider decodes `data[0].b64_json`, saves a PNG under `~/.pi/agent/generated_images/<session_id>/`, and returns the `file://` URL, path, and `revised_prompt` when present.
+
+The valid TheClawBay image model IDs exposed here are `gpt-image-2` and `gpt-image-1.5`. `gpt-image-2.0` is not a valid model ID.
 
 ### Skill guidance
 
@@ -165,7 +193,7 @@ If needed, load it explicitly inside Pi:
 /skill:theclawbay-imagegen
 ```
 
-### Direct Images API fallback
+### Direct Images API outside Pi
 
 For programmatic image generation outside the Pi provider loop, call TheClawBay's OpenAI-compatible Images API directly:
 
@@ -187,7 +215,7 @@ Example payload:
 }
 ```
 
-Use the direct API only when you need programmatic image generation outside Pi or when hosted generation is unavailable.
+Use the direct API outside Pi only when you need your own programmatic integration or when hosted generation is unavailable. Inside Pi, selecting `theclawbay/gpt-image-2` or `theclawbay/gpt-image-1.5` uses this same endpoint automatically.
 
 ## Usage
 
