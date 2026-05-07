@@ -2,6 +2,7 @@ import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 
 export const THECLAWBAY_OPENAI_DISCOVERY_BASE_URL = "https://api.theclawbay.com/v1";
 export const THECLAWBAY_CODEX_BASE_URL = "https://api.theclawbay.com/backend-api/codex";
+export const THECLAWBAY_CODEX_RESPONSES_URL = `${THECLAWBAY_CODEX_BASE_URL}/responses`;
 export const THECLAWBAY_QUOTA_URL = "https://theclawbay.com/api/codex-auth/v1/quota";
 export const THECLAWBAY_OPENAI_MODELS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/models`;
 export const THECLAWBAY_IMAGES_GENERATIONS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/images/generations`;

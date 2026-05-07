@@ -231,29 +231,24 @@ try {
 
   const oneByOnePngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
   let imageRequest;
-  let imageAttempts = 0;
   globalThis.fetch = async (url, init) => {
-    if (String(url).endsWith('/images/generations')) {
-      imageAttempts += 1;
+    if (String(url).endsWith('/responses')) {
       imageRequest = { url: String(url), body: JSON.parse(String(init.body)) };
-      if (imageAttempts === 1) {
-        return {
-          ok: false,
-          status: 503,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          async json() {
-            return { error: { message: 'The model service is temporarily unavailable.', code: 'service_unavailable' } };
-          },
-        };
-      }
-      return {
-        ok: true,
+      return new Response([
+        'event: response.created\n',
+        'data: {"type":"response.created","response":{"id":"resp-image"}}\n\n',
+        'event: response.output_item.added\n',
+        'data: {"type":"response.output_item.added","item":{"id":"ig-test","type":"image_generation_call","status":"in_progress"}}\n\n',
+        'event: response.image_generation_call.partial_image\n',
+        `data: {"type":"response.image_generation_call.partial_image","item_id":"ig-test","partial_image_index":0,"partial_image_b64":"${oneByOnePngBase64}"}\n\n`,
+        'event: response.output_item.done\n',
+        `data: {"type":"response.output_item.done","item":{"id":"ig-test","type":"image_generation_call","status":"completed","result":"${oneByOnePngBase64}","revised_prompt":"A tiny test PNG."}}\n\n`,
+        'event: response.completed\n',
+        'data: {"type":"response.completed","response":{"id":"resp-image","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5,"input_tokens_details":{"cached_tokens":0}}}}\n\n',
+      ].join(''), {
         status: 200,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        async json() {
-          return { data: [{ b64_json: oneByOnePngBase64, revised_prompt: 'A tiny test PNG.' }] };
-        },
-      };
+        headers: { 'content-type': 'text/event-stream' },
+      });
     }
     throw new Error(`unexpected image fetch ${url}`);
   };
@@ -283,11 +278,15 @@ try {
     'image generation should emit the standard assistant message event sequence',
   );
   const imageDone = imageEvents.find((event) => event.type === 'done');
-  assert.equal(imageRequest.url, 'https://api.theclawbay.com/v1/images/generations');
-  assert.equal(imageRequest.body.model, 'gpt-image-2');
-  assert.equal(imageRequest.body.prompt, 'Draw a tiny test PNG.');
-  assert.equal(imageRequest.body.size, '1024x1024');
-  assert.equal(imageAttempts, 2, 'image generation should retry transient service failures');
+  assert.equal(imageRequest.url, 'https://api.theclawbay.com/backend-api/codex/responses');
+  assert.equal(imageRequest.body.model, 'gpt-5.5');
+  assert.equal(imageRequest.body.input[0].content[0].text, 'Draw a tiny test PNG.');
+  assert.equal(imageRequest.body.stream, true);
+  assert.deepEqual(
+    imageRequest.body.tools[0],
+    { type: 'image_generation', model: 'gpt-image-2', output_format: 'png', size: '1024x1024', partial_images: 2 },
+    'gpt-image-2 should use the hosted Responses image_generation tool to avoid Images API socket timeouts',
+  );
   assert.ok(imageDone, 'image generation stream should finish successfully');
   assert.equal(imageDone.message.provider, 'theclawbay');
   assert.equal(imageDone.message.model, 'gpt-image-2');

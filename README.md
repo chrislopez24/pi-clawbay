@@ -61,9 +61,9 @@ Requests for `theclawbay/*` text and coding models are sent through TheClawBay's
 
 - `https://api.theclawbay.com/backend-api/codex`
 
-Requests for `theclawbay/gpt-image-2` are sent through TheClawBay's OpenAI-compatible Images route:
+Requests for `theclawbay/gpt-image-2` are sent through TheClawBay's Codex Responses route with the hosted `image_generation` tool:
 
-- `https://api.theclawbay.com/v1/images/generations`
+- `https://api.theclawbay.com/backend-api/codex/responses`
 
 This extension uses a custom Responses transport for that route. It sends:
 
@@ -71,6 +71,7 @@ This extension uses a custom Responses transport for that route. It sends:
 - `chatgpt-account-id: theclawbay`
 - `session_id` when Pi provides a session id
 - `prompt_cache_key` in the request body
+- `tools: [{ type: "image_generation", model: "gpt-image-2", output_format: "png", size: "1024x1024", partial_images: 2 }]`
 
 This avoids Pi's built-in `openai-codex-responses` JWT parsing path, which expects a ChatGPT/Codex-style token and can fail with `Failed to extract accountId from token` when given a normal TheClawBay API key.
 
@@ -120,7 +121,7 @@ Current fallback list in this package:
 - `gpt-5.1-codex-max`
 - `gpt-5.1-codex-mini`
 
-`gpt-image-2` is exposed because TheClawBay's latest npm setup marks it as an OpenAI-compatible image generation endpoint backed by `codex-lb`. Other native image-generation models returned by discovery, such as `gpt-image-1.5`, remain hidden until this extension has a dedicated, tested flow for them.
+`gpt-image-2` is exposed because TheClawBay's latest npm setup marks it as an image generation model backed by `codex-lb`. The extension uses the hosted Responses image tool instead of the synchronous Images API because realistic 1024x1024 prompts can exceed the Images route socket window and fail as `fetch failed`. Other native image-generation models returned by discovery, such as `gpt-image-1.5`, remain hidden until this extension has a dedicated, tested flow for them.
 
 ## Usage
 
@@ -135,7 +136,7 @@ Use `/model` command in pi:
 /model theclawbay/gpt-image-2
 ```
 
-When `gpt-image-2` is selected, Pi receives a normal assistant message event sequence and the generated PNG is saved locally. Set `PI_CLAWBAY_IMAGE_DIR` to override the output directory; otherwise images are saved under Pi's generated-files directory.
+When `gpt-image-2` is selected, Pi receives a normal assistant message event sequence and the generated PNG is saved locally. Set `PI_CLAWBAY_IMAGE_DIR` to override the output directory; otherwise images are saved under Pi's generated-files directory. If TheClawBay sends partial images and the final image is unavailable, the latest partial PNG is saved instead of returning a socket-level failure.
 
 ### Commands
 
@@ -174,7 +175,7 @@ export default function (pi: ExtensionAPI) {
 | Provider | Base URL | API Type |
 |----------|----------|----------|
 | `theclawbay` | `https://api.theclawbay.com/backend-api/codex` | OpenAI Codex Responses |
-| `theclawbay/gpt-image-2` | `https://api.theclawbay.com/v1/images/generations` | OpenAI Images Generations |
+| `theclawbay/gpt-image-2` | `https://api.theclawbay.com/backend-api/codex/responses` | Hosted Responses `image_generation` |
 
 ### Authentication
 
