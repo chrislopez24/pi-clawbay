@@ -104,7 +104,7 @@ Why split it?
 - `gpt-5.4` is configured with a `272,000` token context window.
 - `gpt-5.4[1m]` is configured with a `1,050,000` token context window.
 - Current non-5.4 GPT-5/Codex variants default to `272,000` context and `128,000` max output tokens.
-- `gpt-image-2` uses the Images API path with `1024x1024` PNG output, `272,000` context metadata, and `65,536` max output metadata.
+- `gpt-image-2` uses the hosted Responses image-generation path with `1024x1024` PNG output, `272,000` context metadata, and `65,536` max output metadata.
 
 ### Example Model List
 
@@ -136,7 +136,7 @@ Use `/model` command in pi:
 /model theclawbay/gpt-image-2
 ```
 
-When `gpt-image-2` is selected, Pi receives a normal assistant message event sequence and the generated PNG is saved locally. Set `PI_CLAWBAY_IMAGE_DIR` to override the output directory; otherwise images are saved under Pi's generated-files directory. If TheClawBay sends partial images and the final image is unavailable, the latest partial PNG is saved instead of returning a socket-level failure.
+When `gpt-image-2` is selected, Pi receives a normal assistant message event sequence and the generated PNG is saved locally. Set `PI_CLAWBAY_IMAGE_DIR` to override the output directory; otherwise images are saved under Pi's generated-files directory. Transient hosted image failures are retried up to 5 times by default. Partial images are not reported as success unless `PI_CLAWBAY_IMAGE_ALLOW_PARTIAL=1` is set.
 
 ### Commands
 

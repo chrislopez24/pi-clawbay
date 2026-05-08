@@ -33,6 +33,20 @@ interface HostedImageCandidate {
 
 const DEFAULT_IMAGE_RESPONSES_MODEL_ID = "gpt-5.5";
 const HOSTED_IMAGE_PARTIAL_COUNT = 2;
+const DEFAULT_HOSTED_IMAGE_MAX_RETRIES = 5;
+const ALLOW_PARTIAL_ENV = "PI_CLAWBAY_IMAGE_ALLOW_PARTIAL";
+
+class HostedImageGenerationStreamError extends Error {
+	readonly partial?: HostedImageCandidate;
+	readonly retryable: boolean;
+
+	constructor(message: string, options?: { partial?: HostedImageCandidate; retryable?: boolean }) {
+		super(message);
+		this.name = "HostedImageGenerationStreamError";
+		this.partial = options?.partial;
+		this.retryable = options?.retryable ?? false;
+	}
+}
 
 export function getImageOutputDir(): string {
 	const overrideDir = process.env.PI_CLAWBAY_IMAGE_DIR?.trim();
@@ -188,18 +202,45 @@ async function fetchHostedImageGeneration(
 	body: unknown,
 	options?: SimpleStreamOptions
 ): Promise<HostedImageGenerationResult> {
-	const response = await fetch(THECLAWBAY_CODEX_RESPONSES_URL, {
-		method: "POST",
-		headers: buildHostedRequestHeaders(apiKey, options),
-		body: JSON.stringify(body),
-		signal: options?.signal,
-	});
-	await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, createHostedRequestModel(model));
-	if (!response.ok) {
-		throw new Error(await response.text());
+	let latestPartial: HostedImageCandidate | undefined;
+	let lastError: unknown;
+	const maxRetries = getHostedImageMaxRetries();
+
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		const response = await fetch(THECLAWBAY_CODEX_RESPONSES_URL, {
+			method: "POST",
+			headers: buildHostedRequestHeaders(apiKey, options),
+			body: JSON.stringify(body),
+			signal: options?.signal,
+		});
+		await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, createHostedRequestModel(model));
+		if (!response.ok) {
+			const message = await response.text();
+			if (attempt < maxRetries && isRetryableHttpStatus(response.status)) {
+				lastError = new Error(message);
+				continue;
+			}
+			throw new Error(message);
+		}
+
+		try {
+			return await readHostedImageGenerationStream(response);
+		} catch (error) {
+			lastError = error;
+			if (error instanceof HostedImageGenerationStreamError && error.partial) {
+				latestPartial = error.partial;
+			}
+			if (error instanceof HostedImageGenerationStreamError && error.retryable && attempt < maxRetries && !options?.signal?.aborted) {
+				continue;
+			}
+			break;
+		}
 	}
 
-	return readHostedImageGenerationStream(response);
+	if (latestPartial && isPartialImageFallbackEnabled()) {
+		return { ...latestPartial, usedPartial: true };
+	}
+	throw lastError instanceof Error ? lastError : new Error("TheClawBay hosted image generation failed");
 }
 
 async function readHostedImageGenerationStream(response: Response): Promise<HostedImageGenerationResult> {
@@ -228,22 +269,28 @@ async function readHostedImageGenerationStream(response: Response): Promise<Host
 		}
 
 		if (eventType === "response.completed") {
+			if (isRecord(event.response)) {
+				const completedImage = extractFinalImageFromResponse(event.response);
+				if (completedImage) {
+					finalImage = completedImage;
+				}
+			}
 			completed = true;
 			continue;
 		}
 
 		if (eventType === "response.failed") {
-			if (latestPartial) {
-				return { ...latestPartial, usedPartial: true };
-			}
-			throw new Error(readResponseFailureMessage(event, "TheClawBay hosted image generation failed"));
+			throw new HostedImageGenerationStreamError(readResponseFailureMessage(event, "TheClawBay hosted image generation failed"), {
+				partial: latestPartial,
+				retryable: isRetryableResponseFailure(event),
+			});
 		}
 
 		if (eventType === "error") {
-			if (latestPartial) {
-				return { ...latestPartial, usedPartial: true };
-			}
-			throw new Error(readResponseFailureMessage(event, "TheClawBay hosted image generation stream error"));
+			throw new HostedImageGenerationStreamError(readResponseFailureMessage(event, "TheClawBay hosted image generation stream error"), {
+				partial: latestPartial,
+				retryable: true,
+			});
 		}
 	}
 
@@ -251,12 +298,56 @@ async function readHostedImageGenerationStream(response: Response): Promise<Host
 		return { ...finalImage, usedPartial: false };
 	}
 	if (latestPartial) {
-		return { ...latestPartial, usedPartial: true };
+		throw new HostedImageGenerationStreamError("TheClawBay hosted image generation completed without a final image", {
+			partial: latestPartial,
+			retryable: true,
+		});
 	}
 	if (!completed) {
 		throw new Error("TheClawBay hosted image generation stream ended before completion");
 	}
 	throw new Error("TheClawBay hosted image generation response did not include an image");
+}
+
+function extractFinalImageFromResponse(response: Record<string, unknown>): HostedImageCandidate | undefined {
+	const output = Array.isArray(response.output) ? response.output : [];
+	for (const item of output) {
+		if (!isRecord(item) || item.type !== "image_generation_call" || typeof item.result !== "string" || item.result.length === 0) {
+			continue;
+		}
+
+		return {
+			base64: item.result,
+			revisedPrompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
+		};
+	}
+	return undefined;
+}
+
+function getHostedImageMaxRetries(): number {
+	const value = process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES?.trim();
+	if (!value) {
+		return DEFAULT_HOSTED_IMAGE_MAX_RETRIES;
+	}
+	const parsed = Number.parseInt(value, 10);
+	return Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, 5)) : DEFAULT_HOSTED_IMAGE_MAX_RETRIES;
+}
+
+function isPartialImageFallbackEnabled(): boolean {
+	const value = process.env[ALLOW_PARTIAL_ENV]?.trim().toLowerCase();
+	return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+	return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+function isRetryableResponseFailure(event: Record<string, unknown>): boolean {
+	const response = isRecord(event.response) ? event.response : undefined;
+	const error = isRecord(response?.error) ? response.error : undefined;
+	const code = typeof error?.code === "string" ? error.code : "";
+	const type = typeof error?.type === "string" ? error.type : "";
+	return code === "service_unavailable" || code === "proxy_request_failed" || type === "server_error";
 }
 
 async function* parseTheClawBaySse(response: Response): AsyncGenerator<Record<string, unknown>> {
