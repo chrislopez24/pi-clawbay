@@ -1,9 +1,11 @@
 /**
  * TheClawBay Provider Extension for Pi Coding Agent
  *
- * Provides access to GPT-5 and Codex models through TheClawBay API.
- * Uses a single provider endpoint:
- * - `theclawbay`: OpenAI-compatible endpoint for GPT/Codex models
+ * Provides access to GPT-5, Codex, Gemini, and image models through TheClawBay API.
+ * Uses a single `theclawbay` provider with per-model routing:
+ * - GPT/Codex: custom native Codex transport for prompt-cache hits
+ * - Gemini: Pi's native google-generative-ai transport against TheClawBay /v1beta
+ * - gpt-image-2: hosted Codex Responses image_generation tool
  *
  * Features:
  * - /quota command to check detailed usage

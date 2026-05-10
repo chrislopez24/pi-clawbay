@@ -9,7 +9,6 @@ import {
 	IMAGE_GENERATION_MODEL_INPUTS,
 	MODEL_INPUTS,
 	OPENAI_CODEX_CONTEXT_WINDOW,
-	OPENAI_CODEX_THINKING_LEVEL_MAP,
 	OPENAI_DEFAULT_CONTEXT_WINDOW,
 	OPENAI_DEFAULT_MAX_TOKENS,
 	OPENAI_FRONTIER_CONTEXT_WINDOW,
@@ -18,6 +17,26 @@ import {
 	PINNED_MODEL_IDS,
 	ZERO_COST,
 } from "./constants.js";
+import { createGoogleModelConfig, isGoogleModelId } from "./google-models.js";
+import type { TheClawBayModelMetadata } from "./types.js";
+
+export { isGoogleModelId } from "./google-models.js";
+
+type ModelSource = string | TheClawBayModelMetadata;
+type ThinkingLevelMap = NonNullable<ProviderModelConfig["thinkingLevelMap"]>;
+
+const FALLBACK_REASONING_EFFORTS: Record<string, string[]> = {
+	"gpt-5.5": ["low", "medium", "high", "xhigh"],
+	[GPT_54_DEFAULT_MODEL_ID]: ["minimal", "low", "medium", "high"],
+	[GPT_54_1M_MODEL_ID]: ["minimal", "low", "medium", "high"],
+	"gpt-5.4-mini": ["minimal", "low", "medium", "high"],
+	"gpt-5.3-codex": ["low", "medium", "high"],
+	"codex-auto-review": ["low", "medium", "high"],
+	"gpt-5.2-codex": ["low", "medium", "high", "xhigh"],
+	"gpt-5.2": ["none", "low", "medium", "high", "xhigh"],
+	"gpt-5.1-codex-max": ["none", "medium", "high", "xhigh"],
+	"gpt-5.1-codex-mini": ["medium", "high"],
+};
 
 export function dedupeIds(ids: string[]): string[] {
 	const seen = new Set<string>();
@@ -27,6 +46,20 @@ export function dedupeIds(ids: string[]): string[] {
 		if (!seen.has(id)) {
 			seen.add(id);
 			deduped.push(id);
+		}
+	}
+
+	return deduped;
+}
+
+function dedupeModelMetadata(models: TheClawBayModelMetadata[]): TheClawBayModelMetadata[] {
+	const seen = new Set<string>();
+	const deduped: TheClawBayModelMetadata[] = [];
+
+	for (const model of models) {
+		if (!seen.has(model.id)) {
+			seen.add(model.id);
+			deduped.push(model);
 		}
 	}
 
@@ -70,10 +103,6 @@ function formatModelNamePart(part: string): string {
 	return /^\d+(\.\d+)?$/.test(part) ? part.toUpperCase() : toTitleCase(part);
 }
 
-function isGpt54Or55Model(id: string): boolean {
-	return id.startsWith("gpt-5.4") || id.startsWith("gpt-5.5");
-}
-
 export function isSupportedImageGenerationModel(id: string): boolean {
 	return id === GPT_IMAGE_2_MODEL_ID;
 }
@@ -82,21 +111,37 @@ function isHiddenImageGenerationModel(id: string): boolean {
 	return HIDDEN_MODEL_ID_PREFIXES.some((prefix) => id.startsWith(prefix)) && !isSupportedImageGenerationModel(id);
 }
 
+function toModelMetadata(source: ModelSource): TheClawBayModelMetadata {
+	return typeof source === "string" ? { id: source } : source;
+}
+
+function withFallbackMetadata(id: string): TheClawBayModelMetadata {
+	return {
+		id,
+		...(FALLBACK_REASONING_EFFORTS[id]
+			? { supportsReasoning: true, supportedReasoningEfforts: [...FALLBACK_REASONING_EFFORTS[id]] }
+			: {}),
+	};
+}
+
 function createModelConfig(
 	id: string,
 	name: string,
 	cost: ProviderModelConfig["cost"],
 	contextWindow: number,
-	maxTokens: number
+	maxTokens: number,
+	options?: { api?: ProviderModelConfig["api"]; baseUrl?: string; reasoning?: boolean; thinkingLevelMap?: ThinkingLevelMap }
 ): ProviderModelConfig {
 	const isImageModel = isSupportedImageGenerationModel(id);
-	const isReasoningModel = !isImageModel;
+	const isReasoningModel = options?.reasoning ?? !isImageModel;
 
 	return {
 		id,
 		name,
+		...(options?.api ? { api: options.api } : {}),
+		...(options?.baseUrl ? { baseUrl: options.baseUrl } : {}),
 		reasoning: isReasoningModel,
-		...(isReasoningModel && isGpt54Or55Model(id) ? { thinkingLevelMap: { ...OPENAI_CODEX_THINKING_LEVEL_MAP } } : {}),
+		...(isReasoningModel && options?.thinkingLevelMap ? { thinkingLevelMap: { ...options.thinkingLevelMap } } : {}),
 		input: isImageModel ? [...IMAGE_GENERATION_MODEL_INPUTS] : [...MODEL_INPUTS],
 		cost: { ...cost },
 		contextWindow,
@@ -104,35 +149,97 @@ function createModelConfig(
 	};
 }
 
-function createOpenAIModel(id: string): ProviderModelConfig {
+function resolveReasoning(metadata: TheClawBayModelMetadata): boolean {
+	if (isSupportedImageGenerationModel(metadata.id)) {
+		return false;
+	}
+
+	if (typeof metadata.supportsReasoning === "boolean") {
+		return metadata.supportsReasoning;
+	}
+
+	if (isGoogleModelId(metadata.id)) {
+		return false;
+	}
+
+	return true;
+}
+
+function resolveThinkingLevelMap(metadata: TheClawBayModelMetadata): ThinkingLevelMap | undefined {
+	if (!resolveReasoning(metadata)) {
+		return undefined;
+	}
+
+	if (metadata.supportedReasoningEfforts) {
+		return buildThinkingLevelMap(metadata.supportedReasoningEfforts);
+	}
+
+	const fallbackEfforts = FALLBACK_REASONING_EFFORTS[metadata.id];
+	return fallbackEfforts ? buildThinkingLevelMap(fallbackEfforts) : undefined;
+}
+
+function buildThinkingLevelMap(efforts: string[]): ThinkingLevelMap {
+	const supported = new Set(efforts.filter((effort) => typeof effort === "string" && effort.length > 0));
+	return {
+		off: supported.has("none") ? "none" : null,
+		minimal: supported.has("minimal") ? "minimal" : supported.has("low") ? "low" : null,
+		low: supported.has("low") ? "low" : null,
+		medium: supported.has("medium") ? "medium" : null,
+		high: supported.has("high") ? "high" : null,
+		xhigh: supported.has("xhigh") ? "xhigh" : null,
+	};
+}
+
+function createOpenAIModel(source: ModelSource): ProviderModelConfig {
+	const metadata = toModelMetadata(source);
+	const id = metadata.id;
 	const cost = OPENAI_KNOWN_COSTS[id] ?? ZERO_COST;
+	const name = metadata.name?.trim() || formatOpenAIModelName(id);
+	const options = { reasoning: resolveReasoning(metadata), thinkingLevelMap: resolveThinkingLevelMap(metadata) };
 
 	if (id === GPT_54_DEFAULT_MODEL_ID) {
-		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_CODEX_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
+		return createModelConfig(id, name, cost, OPENAI_CODEX_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS, options);
 	}
 
 	if (id === GPT_54_1M_MODEL_ID) {
-		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_FRONTIER_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
+		return createModelConfig(id, name, cost, OPENAI_FRONTIER_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS, options);
 	}
 
 	if (id === GPT_IMAGE_2_MODEL_ID) {
-		return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_IMAGE_MAX_TOKENS);
+		return createModelConfig(id, name, cost, OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_IMAGE_MAX_TOKENS, options);
 	}
 
-	return createModelConfig(id, formatOpenAIModelName(id), cost, OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS);
+	if (isGoogleModelId(id)) {
+		return createGoogleModelConfig({ id, name, cost });
+	}
+
+	return createModelConfig(id, name, cost, OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS, options);
 }
 
-export function buildOpenAIModels(ids: string[]): ProviderModelConfig[] {
-	return dedupeIds(ids).map((id) => createOpenAIModel(id));
+export function buildOpenAIModels(sources: ModelSource[]): ProviderModelConfig[] {
+	return dedupeModelMetadata(sources.map(toModelMetadata)).map((model) => createOpenAIModel(model));
 }
 
 export function buildFallbackOpenAIModels(): ProviderModelConfig[] {
-	return buildOpenAIModels(FALLBACK_OPENAI_MODEL_IDS);
+	return buildOpenAIModels(FALLBACK_OPENAI_MODEL_IDS.map(withFallbackMetadata));
 }
 
 export function normalizeOpenAIModelIds(ids: string[], options?: { includePinned?: boolean }): string[] {
 	const normalized = dedupeIds(ids.flatMap(normalizeOpenAIModelId));
 	return options?.includePinned ? dedupeIds([...normalized, ...PINNED_MODEL_IDS]) : normalized;
+}
+
+export function normalizeOpenAIModelMetadata(
+	models: TheClawBayModelMetadata[],
+	options?: { includePinned?: boolean }
+): TheClawBayModelMetadata[] {
+	const normalized = dedupeModelMetadata(models.flatMap(normalizeOpenAIModelMetadataEntry));
+	if (!options?.includePinned) {
+		return normalized;
+	}
+
+	const pinned = PINNED_MODEL_IDS.map(withFallbackMetadata);
+	return dedupeModelMetadata([...normalized, ...pinned]);
 }
 
 function normalizeOpenAIModelId(id: string): string[] {
@@ -145,6 +252,23 @@ function normalizeOpenAIModelId(id: string): string[] {
 	}
 
 	return [id];
+}
+
+function normalizeOpenAIModelMetadataEntry(model: TheClawBayModelMetadata): TheClawBayModelMetadata[] {
+	const id = model.id.trim();
+	if (normalizeOpenAIModelId(id).length === 0) {
+		return [];
+	}
+
+	const normalized = { ...model, id };
+	if (id === GPT_54_UPSTREAM_MODEL_ID) {
+		return [
+			{ ...normalized, id: GPT_54_DEFAULT_MODEL_ID, name: model.name || formatOpenAIModelName(GPT_54_DEFAULT_MODEL_ID) },
+			{ ...normalized, id: GPT_54_1M_MODEL_ID, name: formatOpenAIModelName(GPT_54_1M_MODEL_ID) },
+		];
+	}
+
+	return [normalized];
 }
 
 export function resolveUpstreamModelId(id: string): string {

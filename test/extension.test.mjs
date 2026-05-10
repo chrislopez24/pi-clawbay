@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { streamSimpleGoogle } from '@earendil-works/pi-ai';
 import extension from '../dist/index.js';
-import { readCachedModelIds } from '../dist/model-cache.js';
+import { createGoogleModelConfig, isGoogleModelId } from '../dist/google-models.js';
+import { readCachedModelIds, readCachedModelMetadata } from '../dist/model-cache.js';
 import { buildOpenAIModels, normalizeOpenAIModelIds } from '../dist/models.js';
 import {
   buildTheClawBayHeaders,
@@ -57,7 +59,32 @@ try {
       return {
         ok: true,
         async json() {
-          return { data: [{ id: 'gpt-5.5' }, { id: 'gpt-image-2' }, { id: 'gpt-5.4' }] };
+          return {
+            data: [
+              {
+                id: 'gpt-5.5',
+                display_name: 'GPT-5.5',
+                supports_reasoning: true,
+                supported_reasoning_efforts: ['low', 'medium', 'high', 'xhigh'],
+                default_reasoning_effort: 'xhigh',
+              },
+              { id: 'gpt-image-2', display_name: 'GPT Image 2', supports_reasoning: false, supported_reasoning_efforts: [], default_reasoning_effort: null },
+              {
+                id: 'gpt-5.4',
+                display_name: 'GPT-5.4',
+                supports_reasoning: true,
+                supported_reasoning_efforts: ['minimal', 'low', 'medium', 'high'],
+                default_reasoning_effort: 'medium',
+              },
+              {
+                id: 'gemini-3-pro-preview',
+                display_name: 'Gemini 3 Pro Preview',
+                supports_reasoning: false,
+                supported_reasoning_efforts: [],
+                default_reasoning_effort: null,
+              },
+            ],
+          };
         },
       };
     }
@@ -78,28 +105,65 @@ try {
 
   await waitForRefresh();
   assert.equal(firstRegistrations.length, 2, 'live refresh should re-register after discovery');
-  assert.deepEqual(firstRegistrations[1].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]']);
-  for (const id of ['gpt-5.5', 'gpt-5.4', 'gpt-5.4[1m]']) {
+  assert.deepEqual(firstRegistrations[1].config.models.map((model) => model.id), [
+    'gpt-5.5',
+    'gpt-image-2',
+    'gpt-5.4',
+    'gpt-5.4[1m]',
+    'gemini-3-pro-preview',
+  ]);
+  const liveGpt55 = firstRegistrations[1].config.models.find((entry) => entry.id === 'gpt-5.5');
+  assert.equal(liveGpt55?.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should expose xhigh from live metadata');
+  assert.equal(liveGpt55?.thinkingLevelMap?.minimal, 'low', 'gpt-5.5 should map minimal to low when only low is supported upstream');
+  for (const id of ['gpt-5.4', 'gpt-5.4[1m]']) {
     const model = firstRegistrations[1].config.models.find((entry) => entry.id === id);
-    assert.equal(model?.thinkingLevelMap?.xhigh, 'xhigh', `${id} should explicitly expose xhigh thinking`);
-    assert.equal(model?.thinkingLevelMap?.minimal, 'low', `${id} should map minimal thinking to low`);
+    assert.equal(model?.thinkingLevelMap?.xhigh, null, `${id} should not expose unsupported xhigh thinking`);
+    assert.equal(model?.thinkingLevelMap?.minimal, 'minimal', `${id} should preserve upstream minimal thinking`);
   }
+  const liveGemini = firstRegistrations[1].config.models.find((entry) => entry.id === 'gemini-3-pro-preview');
+  assert.equal(liveGemini?.api, 'google-generative-ai', 'Gemini models should use Pi\'s native Google transport');
+  assert.equal(liveGemini?.baseUrl, 'https://api.theclawbay.com/v1beta', 'Gemini models should use TheClawBay\'s Gemini-compatible base URL');
+  assert.equal(liveGemini?.reasoning, false, 'Gemini models should not inherit Codex reasoning settings when discovery says reasoning is unsupported');
+  assert.equal(liveGemini?.contextWindow, 1048576, 'Gemini models should use the native Gemini context window');
+  assert.equal(liveGemini?.maxTokens, 65536, 'Gemini models should use the native Gemini output limit');
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
-  assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]']);
+  assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview']);
+  assert.equal(cache.models.find((model) => model.id === 'gemini-3-pro-preview')?.supportsReasoning, false, 'cache should preserve live reasoning metadata');
 
   globalThis.fetch = async () => ({ ok: false, async json() { return {}; } });
   const secondRegistrations = [];
   extension(createPi(secondRegistrations));
-  assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]']);
+  assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview']);
+  assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gemini-3-pro-preview')?.reasoning, false);
 
   const staleCacheTime = Date.now() + 7 * 60 * 60 * 1000;
   assert.equal(readCachedModelIds(staleCacheTime), null, 'stale cache should be ignored by default');
-  assert.deepEqual(readCachedModelIds(staleCacheTime, { allowStale: true }), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]'], 'stale cache should be available as a startup fallback');
+  assert.deepEqual(
+    readCachedModelIds(staleCacheTime, { allowStale: true }),
+    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview'],
+    'stale cache should be available as a startup fallback',
+  );
+  assert.equal(
+    readCachedModelMetadata(staleCacheTime, { allowStale: true }).find((model) => model.id === 'gemini-3-pro-preview')?.supportsReasoning,
+    false,
+    'stale startup cache should preserve Gemini metadata',
+  );
+
+  writeFileSync(
+    join(cacheDir, 'models.json'),
+    `${JSON.stringify({ version: 1, fetchedAt: new Date().toISOString(), modelIds: ['gemini-3-pro-preview'] })}\n`,
+    'utf8',
+  );
+  assert.deepEqual(readCachedModelIds(Date.now()), ['gemini-3-pro-preview'], 'legacy v1 id-only caches should remain readable');
+  const legacyGemini = buildOpenAIModels(readCachedModelIds(Date.now()))[0];
+  assert.equal(legacyGemini.reasoning, false, 'legacy cached Gemini ids should still use safe Gemini defaults');
+  assert.equal(legacyGemini.api, 'google-generative-ai', 'legacy cached Gemini ids should still use Pi\'s native Google transport');
+  assert.equal(legacyGemini.baseUrl, 'https://api.theclawbay.com/v1beta', 'legacy cached Gemini ids should still use the Gemini-compatible base URL');
 
   assert.deepEqual(
-    normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-2', 'gpt-image-1.5', 'gpt-5.4'], { includePinned: true }),
-    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]'],
+    normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-2', 'gpt-image-1.5', 'gpt-5.4', 'gemini-3-pro-preview'], { includePinned: true }),
+    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview'],
     'gpt-image-2 should be exposed while unsupported native image models stay hidden',
   );
 
@@ -194,6 +258,7 @@ try {
       tool_choice: 'none',
       parallel_tool_calls: false,
       store: true,
+      prompt_cache_key: 'session-123',
     },
     { systemPrompt: 'system from pi', messages: [] },
   );
@@ -205,7 +270,28 @@ try {
     tool_choice: 'none',
     parallel_tool_calls: false,
     store: true,
+    prompt_cache_key: 'session-123',
   });
+
+  const codexCachePayload = buildTheClawBayPayload(
+    { input: [], stream: true, store: false, prompt_cache_key: 'session-456' },
+    { messages: [] },
+  );
+  assert.deepEqual(
+    codexCachePayload,
+    {
+      input: [],
+      instructions: undefined,
+      include: ['reasoning.encrypted_content'],
+      stream: true,
+      text: { verbosity: 'medium' },
+      tool_choice: 'auto',
+      parallel_tool_calls: true,
+      store: false,
+      prompt_cache_key: 'session-456',
+    },
+    'Codex payload transformation should preserve Pi prompt_cache_key and store=false for cache hits/non-storage',
+  );
 
   const streamModel = createTheClawBayStreamModel({
     id: 'gpt-5.4[1m]',
@@ -230,6 +316,84 @@ try {
   assert.equal(restored.message.provider, 'theclawbay');
   assert.equal(restored.message.api, 'theclawbay-codex-responses');
   assert.equal(restored.message.model, 'gpt-5.4[1m]');
+
+  let googleRequest;
+  globalThis.fetch = async (url, init) => {
+    googleRequest = {
+      url: String(url),
+      body: JSON.parse(String(init.body)),
+      headers: Object.fromEntries(new Headers(init.headers).entries()),
+    };
+    if (!String(url).includes('/v1beta/models/gemini-3-pro-preview:streamGenerateContent')) {
+      throw new Error(`google models must use native Gemini streaming, got ${url}`);
+    }
+
+    return new Response(
+      'data: {"candidates":[{"content":{"parts":[{"text":"OK."}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}\n\n',
+      {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      },
+    );
+  };
+  assert.equal(isGoogleModelId('gemini-3-pro-preview'), true, 'Gemini ids should be recognized as Google-native models');
+  assert.equal(isGoogleModelId('gpt-5.4-mini'), false, 'GPT ids should not be recognized as Google-native models');
+  const directGoogleModelConfig = createGoogleModelConfig({
+    id: 'gemini-3-pro-preview',
+    name: 'Gemini 3 Pro Preview',
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  });
+  assert.equal(directGoogleModelConfig.api, 'google-generative-ai', 'Google model config should use Pi\'s native Google transport');
+  assert.equal(directGoogleModelConfig.baseUrl, 'https://api.theclawbay.com/v1beta', 'Google model config should use TheClawBay /v1beta');
+  assert.equal(directGoogleModelConfig.reasoning, false, 'Google model config should keep reasoning disabled');
+  assert.equal(directGoogleModelConfig.contextWindow, 1048576, 'Google model config should use the Gemini context window');
+  assert.equal(directGoogleModelConfig.maxTokens, 65536, 'Google model config should use the Gemini output limit');
+
+  const googleModelConfig = buildOpenAIModels([
+    {
+      id: 'gemini-3-pro-preview',
+      name: 'Gemini 3 Pro Preview',
+      supportsReasoning: false,
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+    },
+  ])[0];
+  assert.deepEqual(googleModelConfig, directGoogleModelConfig, 'Generic model builder should delegate Gemini config to the Google module');
+  const googleStream = streamSimpleGoogle(
+    {
+      ...googleModelConfig,
+      provider: 'theclawbay',
+      api: googleModelConfig.api,
+      baseUrl: googleModelConfig.baseUrl,
+    },
+    { messages: [{ role: 'user', content: 'Respond only OK.', timestamp: 0 }] },
+    { apiKey: 'test-key', maxTokens: 16 },
+  );
+  const googleEvents = [];
+  for await (const event of googleStream) {
+    googleEvents.push(event);
+  }
+  const googleDone = googleEvents.find((event) => event.type === 'done');
+  assert.equal(googleRequest.url, 'https://api.theclawbay.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent?alt=sse');
+  assert.equal(googleRequest.headers['x-goog-api-key'], 'test-key');
+  assert.deepEqual(googleRequest.body.contents, [{ parts: [{ text: 'Respond only OK.' }], role: 'user' }]);
+  assert.equal(googleRequest.body.generationConfig.maxOutputTokens, 16);
+  assert.ok(googleDone, 'Gemini models discovered from /v1/models should stream successfully through the native Gemini route');
+  assert.equal(googleDone.message.provider, 'theclawbay');
+  assert.equal(googleDone.message.api, 'google-generative-ai');
+  assert.equal(googleDone.message.model, 'gemini-3-pro-preview');
+  assert.deepEqual(
+    googleDone.message.content.map((block) => ({ type: block.type, text: block.text })),
+    [{ type: 'text', text: 'OK.' }],
+  );
+  assert.deepEqual(googleDone.message.usage, {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
 
   const oneByOnePngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
   let imageRequest;

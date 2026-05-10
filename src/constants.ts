@@ -1,6 +1,7 @@
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 
 export const THECLAWBAY_OPENAI_DISCOVERY_BASE_URL = "https://api.theclawbay.com/v1";
+export const THECLAWBAY_GEMINI_BASE_URL = "https://api.theclawbay.com/v1beta";
 export const THECLAWBAY_CODEX_BASE_URL = "https://api.theclawbay.com/backend-api/codex";
 export const THECLAWBAY_CODEX_RESPONSES_URL = `${THECLAWBAY_CODEX_BASE_URL}/responses`;
 export const THECLAWBAY_QUOTA_URL = "https://theclawbay.com/api/codex-auth/v1/quota";
@@ -9,7 +10,7 @@ export const THECLAWBAY_IMAGES_GENERATIONS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_
 export const THECLAWBAY_CODEX_API = "theclawbay-codex-responses";
 export const THECLAWBAY_CHATGPT_ACCOUNT_ID = "theclawbay";
 
-export const MODEL_CACHE_VERSION = 1;
+export const MODEL_CACHE_VERSION = 2;
 export const MODEL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 export const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 
@@ -39,6 +40,8 @@ export const OPENAI_DEFAULT_CONTEXT_WINDOW = OPENAI_CODEX_CONTEXT_WINDOW;
 export const OPENAI_FRONTIER_CONTEXT_WINDOW = 1050000;
 export const OPENAI_DEFAULT_MAX_TOKENS = 128000;
 export const OPENAI_IMAGE_MAX_TOKENS = 65536;
+export const GOOGLE_GEMINI_CONTEXT_WINDOW = 1048576;
+export const GOOGLE_GEMINI_MAX_TOKENS = 65536;
 
 export const HIDDEN_MODEL_ID_PREFIXES = ["gpt-image-"] as const;
 export const PINNED_MODEL_IDS: string[] = [];

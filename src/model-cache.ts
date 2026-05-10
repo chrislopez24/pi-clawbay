@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { MODEL_CACHE_TTL_MS, MODEL_CACHE_VERSION, MODEL_DISCOVERY_TIMEOUT_MS, THECLAWBAY_OPENAI_MODELS_URL } from "./constants.js";
-import { buildFallbackOpenAIModels, buildOpenAIModels, normalizeOpenAIModelIds } from "./models.js";
+import { buildFallbackOpenAIModels, buildOpenAIModels, normalizeOpenAIModelIds, normalizeOpenAIModelMetadata } from "./models.js";
 import { registerProviders } from "./provider.js";
-import type { ModelCacheFile, OpenAIModelListResponse } from "./types.js";
+import type { ModelCacheFile, OpenAIModelListResponse, TheClawBayModelMetadata } from "./types.js";
 
 export function getModelCachePath(): string {
 	const overrideDir = process.env.PI_CLAWBAY_CACHE_DIR?.trim();
@@ -24,6 +24,11 @@ function debugLog(message: string): void {
 }
 
 export function readCachedModelIds(now = Date.now(), options?: { allowStale?: boolean }): string[] | null {
+	const metadata = readCachedModelMetadata(now, options);
+	return metadata ? metadata.map((model) => model.id) : null;
+}
+
+export function readCachedModelMetadata(now = Date.now(), options?: { allowStale?: boolean }): TheClawBayModelMetadata[] | null {
 	try {
 		const cachePath = getModelCachePath();
 		if (!existsSync(cachePath)) {
@@ -37,9 +42,9 @@ export function readCachedModelIds(now = Date.now(), options?: { allowStale?: bo
 	}
 }
 
-function readValidCacheFile(cachePath: string, now: number, options?: { allowStale?: boolean }): string[] | null {
+function readValidCacheFile(cachePath: string, now: number, options?: { allowStale?: boolean }): TheClawBayModelMetadata[] | null {
 	const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as ModelCacheFile;
-	if (parsed.version !== MODEL_CACHE_VERSION || !Array.isArray(parsed.modelIds) || typeof parsed.fetchedAt !== "string") {
+	if (!isSupportedCacheVersion(parsed.version) || typeof parsed.fetchedAt !== "string") {
 		return null;
 	}
 
@@ -52,31 +57,81 @@ function readValidCacheFile(cachePath: string, now: number, options?: { allowSta
 		return null;
 	}
 
-	const rawIds = parsed.modelIds.filter((id): id is string => typeof id === "string" && id.length > 0);
-	const ids = normalizeOpenAIModelIds(rawIds, { includePinned: true });
-	return ids.length > 0 ? ids : null;
+	const rawModels = extractCachedModelMetadata(parsed);
+	const models = normalizeOpenAIModelMetadata(rawModels, { includePinned: true });
+	return models.length > 0 ? models : null;
+}
+
+function isSupportedCacheVersion(version: unknown): boolean {
+	return version === MODEL_CACHE_VERSION || version === 1;
+}
+
+function extractCachedModelMetadata(parsed: ModelCacheFile): TheClawBayModelMetadata[] {
+	if (Array.isArray(parsed.models)) {
+		return parsed.models
+			.map(normalizeCachedModelEntry)
+			.filter((model): model is TheClawBayModelMetadata => model !== null);
+	}
+
+	const rawIds = Array.isArray(parsed.modelIds) ? parsed.modelIds : [];
+	return normalizeOpenAIModelIds(rawIds.filter((id): id is string => typeof id === "string" && id.length > 0), { includePinned: true }).map(
+		(id) => ({ id })
+	);
+}
+
+function normalizeCachedModelEntry(entry: unknown): TheClawBayModelMetadata | null {
+	if (!entry || typeof entry !== "object") {
+		return null;
+	}
+
+	const source = entry as Partial<TheClawBayModelMetadata>;
+	if (typeof source.id !== "string" || source.id.trim().length === 0) {
+		return null;
+	}
+
+	return {
+		id: source.id.trim(),
+		...(typeof source.name === "string" && source.name.trim().length > 0 ? { name: source.name.trim() } : {}),
+		...(typeof source.supportsReasoning === "boolean" ? { supportsReasoning: source.supportsReasoning } : {}),
+		...(Array.isArray(source.supportedReasoningEfforts)
+			? { supportedReasoningEfforts: source.supportedReasoningEfforts.filter(isNonEmptyString) }
+			: {}),
+		...(source.defaultReasoningEffort === null || typeof source.defaultReasoningEffort === "string"
+			? { defaultReasoningEffort: source.defaultReasoningEffort }
+			: {}),
+	};
 }
 
 export function writeCachedModelIds(ids: string[], now = Date.now()): void {
+	writeCachedModelMetadata(ids.map((id) => ({ id })), now);
+}
+
+export function writeCachedModelMetadata(models: TheClawBayModelMetadata[], now = Date.now()): void {
 	try {
 		const cachePath = getModelCachePath();
 		mkdirSync(dirname(cachePath), { recursive: true });
-		writeFileSync(cachePath, `${JSON.stringify(buildCacheFile(ids, now), null, 2)}\n`, "utf8");
+		writeFileSync(cachePath, `${JSON.stringify(buildCacheFile(models, now), null, 2)}\n`, "utf8");
 	} catch (error) {
-		// Cache writes are best-effort; provider registration should not fail if the cache is unavailable.
 		debugLog(`Failed to write model cache: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
-function buildCacheFile(ids: string[], now: number): ModelCacheFile {
+function buildCacheFile(models: TheClawBayModelMetadata[], now: number): ModelCacheFile {
+	const normalized = normalizeOpenAIModelMetadata(models, { includePinned: true });
 	return {
 		version: MODEL_CACHE_VERSION,
 		fetchedAt: new Date(now).toISOString(),
-		modelIds: normalizeOpenAIModelIds(ids, { includePinned: true }),
+		modelIds: normalized.map((model) => model.id),
+		models: normalized,
 	};
 }
 
 export async function fetchOpenAIModelIds(apiKey: string): Promise<string[] | null> {
+	const metadata = await fetchOpenAIModelMetadata(apiKey);
+	return metadata ? metadata.map((model) => model.id) : null;
+}
+
+export async function fetchOpenAIModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
 	try {
 		const response = await fetch(THECLAWBAY_OPENAI_MODELS_URL, {
 			headers: {
@@ -91,28 +146,49 @@ export async function fetchOpenAIModelIds(apiKey: string): Promise<string[] | nu
 		}
 
 		const payload = (await response.json()) as OpenAIModelListResponse;
-		const ids = normalizeOpenAIModelIds(extractModelIds(payload), { includePinned: true });
-		return ids.length > 0 ? ids : null;
+		const models = normalizeOpenAIModelMetadata(extractModelMetadata(payload), { includePinned: true });
+		return models.length > 0 ? models : null;
 	} catch (error) {
 		debugLog(`Model discovery failed: ${error instanceof Error ? error.message : String(error)}`);
 		return null;
 	}
 }
 
-function extractModelIds(payload: OpenAIModelListResponse): string[] {
+function extractModelMetadata(payload: OpenAIModelListResponse): TheClawBayModelMetadata[] {
 	return (payload.data ?? [])
-		.map((entry) => entry.id?.trim())
-		.filter((id): id is string => typeof id === "string" && id.length > 0);
+		.map((entry) => {
+			const id = entry.id?.trim();
+			if (!id) {
+				return null;
+			}
+
+			return {
+				id,
+				...(typeof entry.display_name === "string" && entry.display_name.trim().length > 0 ? { name: entry.display_name.trim() } : {}),
+				...(typeof entry.supports_reasoning === "boolean" ? { supportsReasoning: entry.supports_reasoning } : {}),
+				...(Array.isArray(entry.supported_reasoning_efforts)
+					? { supportedReasoningEfforts: entry.supported_reasoning_efforts.filter(isNonEmptyString) }
+					: {}),
+				...(entry.default_reasoning_effort === null || typeof entry.default_reasoning_effort === "string"
+					? { defaultReasoningEffort: entry.default_reasoning_effort }
+					: {}),
+			};
+		})
+		.filter((model): model is TheClawBayModelMetadata => model !== null);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === "string" && value.trim().length > 0;
 }
 
 export async function refreshProviderModelsNow(pi: ExtensionAPI, apiKey: string): Promise<number | null> {
-	const ids = await fetchOpenAIModelIds(apiKey);
-	if (!ids) {
+	const metadata = await fetchOpenAIModelMetadata(apiKey);
+	if (!metadata) {
 		return null;
 	}
 
-	writeCachedModelIds(ids);
-	const models = buildOpenAIModels(ids);
+	writeCachedModelMetadata(metadata);
+	const models = buildOpenAIModels(metadata);
 	registerProviders(pi, models);
 	return models.length;
 }
@@ -160,9 +236,9 @@ export function registerModelRefreshCommand(pi: ExtensionAPI, getApiKey: () => s
 }
 
 export function loadProviderModels(): { models: ProviderModelConfig[]; source: "fallback" | "cache" } {
-	const cachedIds = readCachedModelIds(Date.now(), { allowStale: true });
-	if (cachedIds) {
-		return { models: buildOpenAIModels(cachedIds), source: "cache" };
+	const cachedModels = readCachedModelMetadata(Date.now(), { allowStale: true });
+	if (cachedModels) {
+		return { models: buildOpenAIModels(cachedModels), source: "cache" };
 	}
 
 	return { models: buildFallbackOpenAIModels(), source: "fallback" };
