@@ -52,6 +52,10 @@ function createStalePi(registrations) {
   };
 }
 
+function textDeltas(events) {
+  return events.filter((event) => event.type === 'text_delta').map((event) => event.delta).join('');
+}
+
 try {
   process.env.THECLAWBAY_API_KEY = 'test-key';
   globalThis.fetch = async (url) => {
@@ -553,9 +557,13 @@ try {
   }
   assert.deepEqual(
     imageEvents.map((event) => event.type),
-    ['start', 'text_start', 'text_delta', 'text_end', 'done'],
-    'image generation should emit the standard assistant message event sequence',
+    ['start', 'text_start', 'text_delta', 'text_delta', 'text_delta', 'text_delta', 'text_delta', 'text_end', 'done'],
+    'image generation should emit visible progress deltas before the final assistant message',
   );
+  assert.match(textDeltas(imageEvents), /🎨 Preparing image request/, 'image generation should announce request preparation');
+  assert.match(textDeltas(imageEvents), /🖌️ Generating image/, 'image generation should announce generation start');
+  assert.match(textDeltas(imageEvents), /✨ Refining image/, 'image generation should announce partial image refinement');
+  assert.match(textDeltas(imageEvents), /💾 Saving final image/, 'image generation should announce final save');
   const imageDone = imageEvents.find((event) => event.type === 'done');
   assert.equal(imageRequest.url, 'https://api.theclawbay.com/backend-api/codex/responses');
   assert.equal(imageRequest.body.model, 'gpt-5.5');
@@ -629,6 +637,7 @@ try {
   }
   const retryImageDone = retryImageEvents.find((event) => event.type === 'done');
   assert.equal(retryImageAttempts, 2, 'hosted image generation should retry transient response.failed events before saving partials');
+  assert.match(textDeltas(retryImageEvents), /⚠️ Image service was temporarily busy\. Retrying/, 'retrying image generation should show a user-friendly retry progress message');
   assert.ok(retryImageDone, 'retried image generation stream should finish successfully');
   const retryImageText = retryImageDone.message.content[0].text;
   assert.doesNotMatch(retryImageText, /Saved latest partial/, 'successful retry should save the final image instead of the earlier partial');
