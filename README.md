@@ -5,7 +5,7 @@ A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi)
 ## Features
 
 - **GPT-5 & Codex Models** - Access via TheClawBay's native Codex Responses route with session-based prompt-cache hits
-- **Gemini Models** - Dynamically discovered `gemini-*` models use Pi's native Google transport against TheClawBay's `/v1beta` route
+- **Gemini Models** - Dynamically discovered `gemini-*` models use Pi's native Google transport against TheClawBay's `/v1beta` route, including Pi-compatible thinking support by default
 - **Single Provider** - Only `theclawbay` is registered; routing is selected per model
 - **GPT-5.4 Split Options** - `gpt-5.4` and `gpt-5.4[1m]` for clearer cost/context choice
 - **GPT Image 2** - Generate PNG images through TheClawBay's hosted Codex Responses `image_generation` tool
@@ -69,6 +69,7 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
 - **Gemini models** (`gemini-*`) are registered per model with:
   - `api: "google-generative-ai"`
   - `baseUrl: "https://api.theclawbay.com/v1beta"`
+  - `reasoning: true` for the Gemini IDs that Pi's official Google provider marks as thinking-capable (`gemini-2.5-*`, `gemini-live-2.5-*`, `gemini-flash-latest`, `gemini-flash-lite-latest`, `gemini-3*-flash*`, and `gemini-3*-pro*`)
   - Pi then uses its native Google SDK transport (`/v1beta/models/{model}:streamGenerateContent?alt=sse`) instead of the Codex transport. This is required because sending Gemini models to `https://api.theclawbay.com/backend-api/codex/responses` returns `404 upstream returned HTTP 404`.
 - **Image generation** (`gpt-image-2`) uses TheClawBay's Codex Responses route with the hosted `image_generation` tool:
   - `https://api.theclawbay.com/backend-api/codex/responses`
@@ -89,6 +90,16 @@ For `gpt-image-2`, the request also includes:
 - `tools: [{ type: "image_generation", model: "gpt-image-2", output_format: "png", size: "1024x1024", partial_images: 2 }]`
 
 This avoids Pi's built-in `openai-codex-responses` JWT parsing path, which expects a ChatGPT/Codex-style token and can fail with `Failed to extract accountId from token` when given a normal TheClawBay API key.
+
+### Gemini Thinking
+
+Gemini thinking is enabled by default for the same Google-native model families that Pi official marks as compatible; there is no feature flag or environment variable. Pi's Google transport maps Pi reasoning options to Google `thinkingConfig`:
+
+- Gemini 2.5 models use `thinkingBudget`.
+- Gemini 3 Flash / Flash-Lite models use `thinkingLevel` and hide the unsupported `off` level.
+- Gemini 3 Pro / 3.1 Pro models expose only the supported visible levels: `low -> LOW` and `high -> HIGH`; unsupported `off`, `minimal`, and `medium` levels are hidden/skipped by Pi's thinking-level clamp.
+
+If no explicit Pi reasoning level is selected, Pi still sends the official hidden lowest supported Google config for reasoning-capable Gemini 3 models so the request remains valid while not surfacing hidden thoughts.
 
 ### Gemini Cache Limitation
 

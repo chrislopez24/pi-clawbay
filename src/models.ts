@@ -17,7 +17,7 @@ import {
 	PINNED_MODEL_IDS,
 	ZERO_COST,
 } from "./constants.js";
-import { createGoogleModelConfig, isGoogleModelId } from "./google-models.js";
+import { createGoogleModelConfig, isGoogleModelId, resolveGoogleThinkingLevelMap, supportsGoogleThinking } from "./google-models.js";
 import type { TheClawBayModelMetadata } from "./types.js";
 
 export { isGoogleModelId } from "./google-models.js";
@@ -154,12 +154,12 @@ function resolveReasoning(metadata: TheClawBayModelMetadata): boolean {
 		return false;
 	}
 
-	if (typeof metadata.supportsReasoning === "boolean") {
-		return metadata.supportsReasoning;
+	if (isGoogleModelId(metadata.id)) {
+		return supportsGoogleThinking(metadata.id);
 	}
 
-	if (isGoogleModelId(metadata.id)) {
-		return false;
+	if (typeof metadata.supportsReasoning === "boolean") {
+		return metadata.supportsReasoning;
 	}
 
 	return true;
@@ -168,6 +168,10 @@ function resolveReasoning(metadata: TheClawBayModelMetadata): boolean {
 function resolveThinkingLevelMap(metadata: TheClawBayModelMetadata): ThinkingLevelMap | undefined {
 	if (!resolveReasoning(metadata)) {
 		return undefined;
+	}
+
+	if (isGoogleModelId(metadata.id)) {
+		return resolveGoogleThinkingLevelMap(metadata.id);
 	}
 
 	if (metadata.supportedReasoningEfforts) {

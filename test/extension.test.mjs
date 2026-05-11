@@ -123,7 +123,12 @@ try {
   const liveGemini = firstRegistrations[1].config.models.find((entry) => entry.id === 'gemini-3-pro-preview');
   assert.equal(liveGemini?.api, 'google-generative-ai', 'Gemini models should use Pi\'s native Google transport');
   assert.equal(liveGemini?.baseUrl, 'https://api.theclawbay.com/v1beta', 'Gemini models should use TheClawBay\'s Gemini-compatible base URL');
-  assert.equal(liveGemini?.reasoning, false, 'Gemini models should not inherit Codex reasoning settings when discovery says reasoning is unsupported');
+  assert.equal(liveGemini?.reasoning, true, 'Gemini models should enable Pi native Google thinking when Pi marks the model as compatible');
+  assert.deepEqual(
+    liveGemini?.thinkingLevelMap,
+    { off: null, minimal: null, low: 'LOW', medium: null, high: 'HIGH' },
+    'Gemini 3 Pro should expose the same thinking levels as Pi official Google models',
+  );
   assert.equal(liveGemini?.contextWindow, 1048576, 'Gemini models should use the native Gemini context window');
   assert.equal(liveGemini?.maxTokens, 65536, 'Gemini models should use the native Gemini output limit');
 
@@ -135,7 +140,7 @@ try {
   const secondRegistrations = [];
   extension(createPi(secondRegistrations));
   assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview']);
-  assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gemini-3-pro-preview')?.reasoning, false);
+  assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gemini-3-pro-preview')?.reasoning, true);
 
   const staleCacheTime = Date.now() + 7 * 60 * 60 * 1000;
   assert.equal(readCachedModelIds(staleCacheTime), null, 'stale cache should be ignored by default');
@@ -157,7 +162,12 @@ try {
   );
   assert.deepEqual(readCachedModelIds(Date.now()), ['gemini-3-pro-preview'], 'legacy v1 id-only caches should remain readable');
   const legacyGemini = buildOpenAIModels(readCachedModelIds(Date.now()))[0];
-  assert.equal(legacyGemini.reasoning, false, 'legacy cached Gemini ids should still use safe Gemini defaults');
+  assert.equal(legacyGemini.reasoning, true, 'legacy cached Gemini ids should still enable Pi native Google thinking for compatible Gemini models');
+  assert.deepEqual(
+    legacyGemini.thinkingLevelMap,
+    { off: null, minimal: null, low: 'LOW', medium: null, high: 'HIGH' },
+    'legacy cached Gemini ids should still expose Pi official Gemini 3 Pro thinking levels',
+  );
   assert.equal(legacyGemini.api, 'google-generative-ai', 'legacy cached Gemini ids should still use Pi\'s native Google transport');
   assert.equal(legacyGemini.baseUrl, 'https://api.theclawbay.com/v1beta', 'legacy cached Gemini ids should still use the Gemini-compatible base URL');
 
@@ -345,7 +355,33 @@ try {
   });
   assert.equal(directGoogleModelConfig.api, 'google-generative-ai', 'Google model config should use Pi\'s native Google transport');
   assert.equal(directGoogleModelConfig.baseUrl, 'https://api.theclawbay.com/v1beta', 'Google model config should use TheClawBay /v1beta');
-  assert.equal(directGoogleModelConfig.reasoning, false, 'Google model config should keep reasoning disabled');
+  assert.equal(directGoogleModelConfig.reasoning, true, 'Google model config should enable reasoning for Pi-compatible Gemini models');
+  assert.deepEqual(
+    directGoogleModelConfig.thinkingLevelMap,
+    { off: null, minimal: null, low: 'LOW', medium: null, high: 'HIGH' },
+    'Google model config should follow Pi official Gemini 3 Pro thinking levels',
+  );
+  const gemini25Config = createGoogleModelConfig({
+    id: 'gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash',
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  });
+  assert.equal(gemini25Config.reasoning, true, 'Gemini 2.5 models should use Pi thinkingBudget support');
+  assert.equal(gemini25Config.thinkingLevelMap, undefined, 'Gemini 2.5 models should use Pi default thinking levels');
+  const gemini3FlashConfig = createGoogleModelConfig({
+    id: 'gemini-3-flash-preview',
+    name: 'Gemini 3 Flash Preview',
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  });
+  assert.equal(gemini3FlashConfig.reasoning, true, 'Gemini 3 Flash models should use Pi thinkingLevel support');
+  assert.deepEqual(gemini3FlashConfig.thinkingLevelMap, { off: null }, 'Gemini 3 Flash should hide the unsupported off level');
+  const gemini15Config = createGoogleModelConfig({
+    id: 'gemini-1.5-flash',
+    name: 'Gemini 1.5 Flash',
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  });
+  assert.equal(gemini15Config.reasoning, false, 'Gemini 1.5 models should remain non-reasoning like Pi official');
+  assert.equal(gemini15Config.thinkingLevelMap, undefined, 'non-reasoning Gemini models should not expose thinking levels');
   assert.equal(directGoogleModelConfig.contextWindow, 1048576, 'Google model config should use the Gemini context window');
   assert.equal(directGoogleModelConfig.maxTokens, 65536, 'Google model config should use the Gemini output limit');
 
@@ -378,6 +414,11 @@ try {
   assert.equal(googleRequest.headers['x-goog-api-key'], 'test-key');
   assert.deepEqual(googleRequest.body.contents, [{ parts: [{ text: 'Respond only OK.' }], role: 'user' }]);
   assert.equal(googleRequest.body.generationConfig.maxOutputTokens, 16);
+  assert.deepEqual(
+    googleRequest.body.generationConfig.thinkingConfig,
+    { thinkingLevel: 'LOW' },
+    'Gemini 3 Pro without explicit reasoning should still send Pi\'s hidden lowest supported thinking config',
+  );
   assert.ok(googleDone, 'Gemini models discovered from /v1/models should stream successfully through the native Gemini route');
   assert.equal(googleDone.message.provider, 'theclawbay');
   assert.equal(googleDone.message.api, 'google-generative-ai');
@@ -394,6 +435,78 @@ try {
     totalTokens: 2,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
+
+  let googleReasoningRequest;
+  globalThis.fetch = async (url, init) => {
+    googleReasoningRequest = {
+      url: String(url),
+      body: JSON.parse(String(init.body)),
+      headers: Object.fromEntries(new Headers(init.headers).entries()),
+    };
+    if (!String(url).includes('/v1beta/models/gemini-3-pro-preview:streamGenerateContent')) {
+      throw new Error(`google reasoning models must use native Gemini streaming, got ${url}`);
+    }
+
+    return new Response(
+      'data: {"candidates":[{"content":{"parts":[{"text":"OK."}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}\n\n',
+      {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      },
+    );
+  };
+  const googleReasoningStream = streamSimpleGoogle(
+    {
+      ...googleModelConfig,
+      provider: 'theclawbay',
+      api: googleModelConfig.api,
+      baseUrl: googleModelConfig.baseUrl,
+    },
+    { messages: [{ role: 'user', content: 'Respond only OK.', timestamp: 0 }] },
+    { apiKey: 'test-key', maxTokens: 16, reasoning: 'high' },
+  );
+  for await (const _event of googleReasoningStream) {}
+  assert.deepEqual(
+    googleReasoningRequest.body.generationConfig.thinkingConfig,
+    { includeThoughts: true, thinkingLevel: 'HIGH' },
+    'Gemini 3 Pro with high reasoning should send Pi\'s Google thinkingLevel config',
+  );
+
+  let googleBudgetRequest;
+  globalThis.fetch = async (url, init) => {
+    googleBudgetRequest = {
+      url: String(url),
+      body: JSON.parse(String(init.body)),
+      headers: Object.fromEntries(new Headers(init.headers).entries()),
+    };
+    if (!String(url).includes('/v1beta/models/gemini-2.5-flash:streamGenerateContent')) {
+      throw new Error(`Gemini 2.5 models must use native Gemini streaming, got ${url}`);
+    }
+
+    return new Response(
+      'data: {"candidates":[{"content":{"parts":[{"text":"OK."}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}\n\n',
+      {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      },
+    );
+  };
+  const googleBudgetStream = streamSimpleGoogle(
+    {
+      ...gemini25Config,
+      provider: 'theclawbay',
+      api: gemini25Config.api,
+      baseUrl: gemini25Config.baseUrl,
+    },
+    { messages: [{ role: 'user', content: 'Respond only OK.', timestamp: 0 }] },
+    { apiKey: 'test-key', maxTokens: 16, reasoning: 'medium' },
+  );
+  for await (const _event of googleBudgetStream) {}
+  assert.deepEqual(
+    googleBudgetRequest.body.generationConfig.thinkingConfig,
+    { includeThoughts: true, thinkingBudget: 8192 },
+    'Gemini 2.5 with medium reasoning should send Pi\'s Google thinkingBudget config',
+  );
 
   const oneByOnePngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
   let imageRequest;
