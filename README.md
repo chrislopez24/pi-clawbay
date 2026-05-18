@@ -8,7 +8,7 @@ A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi)
 - **Gemini Models** - Dynamically discovered `gemini-*` models use Pi's native Google transport against TheClawBay's `/v1beta` route, including Pi-compatible thinking support by default
 - **Single Provider** - Only `theclawbay` is registered; routing is selected per model
 - **GPT-5.4 Split Options** - `gpt-5.4` and `gpt-5.4[1m]` for clearer cost/context choice
-- **GPT Image 2** - Generate PNG images through TheClawBay's hosted Codex Responses `image_generation` tool
+- **GPT Image 2** - Generate PNG images through TheClawBay's direct OpenAI-compatible Images API
 - **High Usage Headroom** - More capacity than standard subscriptions
 - **Simple Setup** - Single API key
 
@@ -71,10 +71,10 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
   - `baseUrl: "https://api.theclawbay.com/v1beta"`
   - `reasoning: true` for the Gemini IDs that Pi's official Google provider marks as thinking-capable (`gemini-2.5-*`, `gemini-live-2.5-*`, `gemini-flash-latest`, `gemini-flash-lite-latest`, `gemini-3*-flash*`, and `gemini-3*-pro*`)
   - Pi then uses its native Google SDK transport (`/v1beta/models/{model}:streamGenerateContent?alt=sse`) instead of the Codex transport. This is required because sending Gemini models to `https://api.theclawbay.com/backend-api/codex/responses` returns `404 upstream returned HTTP 404`.
-- **Image generation** (`gpt-image-2`) uses TheClawBay's Codex Responses route with the hosted `image_generation` tool:
-  - `https://api.theclawbay.com/backend-api/codex/responses`
+- **Image generation** (`gpt-image-2`) uses TheClawBay's direct OpenAI-compatible Images route:
+  - `https://api.theclawbay.com/v1/images/generations`
 
-For GPT/Codex and hosted image requests, the extension keeps the native Codex semantics that are needed for existing behavior:
+For GPT/Codex text requests, the extension keeps the native Codex semantics that are needed for existing behavior:
 
 - `Authorization: Bearer $THECLAWBAY_API_KEY`
 - `chatgpt-account-id: theclawbay`
@@ -85,11 +85,12 @@ For GPT/Codex and hosted image requests, the extension keeps the native Codex se
 - `include: ["reasoning.encrypted_content"]`
 - `store: false`
 
-For `gpt-image-2`, the request also includes:
+For `gpt-image-2`, the request follows the current TheClawBay docs and sends a direct Images API payload:
 
-- `tools: [{ type: "image_generation", model: "gpt-image-2", output_format: "png", size: "1024x1024", partial_images: 2 }]`
-
-This avoids Pi's built-in `openai-codex-responses` JWT parsing path, which expects a ChatGPT/Codex-style token and can fail with `Failed to extract accountId from token` when given a normal TheClawBay API key.
+- `model: "gpt-image-2"`
+- `prompt: <latest user prompt>`
+- `size: "1024x1024"`
+- `n: 1`
 
 ### Gemini Thinking
 
@@ -138,7 +139,7 @@ Why split it?
 - `gpt-5.4[1m]` is configured with a `1,050,000` token context window.
 - Current non-5.4 GPT-5/Codex variants default to `272,000` context and `128,000` max output tokens.
 - Gemini variants discovered from `/v1/models` use Pi's Google transport with `1,048,576` context and `65,536` max output tokens.
-- `gpt-image-2` uses the hosted Responses image-generation path with `1024x1024` PNG output, `272,000` context metadata, and `65,536` max output metadata.
+- `gpt-image-2` uses the direct `/v1/images/generations` path with `1024x1024` PNG output, `272,000` context metadata, and `65,536` max output metadata.
 
 ### Example Model List
 
@@ -157,7 +158,7 @@ Current fallback list in this package, used only when live discovery and cache a
 
 Live discovery may add newer GPT/Codex and Gemini models such as `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-3.1-pro-preview`, or `gemini-3-flash-preview` when TheClawBay exposes them for your account.
 
-`gpt-image-2` is exposed because TheClawBay's latest npm setup marks it as an image generation model backed by `codex-lb`. The extension uses the hosted Responses image tool instead of the synchronous Images API because realistic 1024x1024 prompts can exceed the Images route socket window and fail as `fetch failed`. Other native image-generation models returned by discovery, such as `gpt-image-1.5`, remain hidden until this extension has a dedicated, tested flow for them.
+`gpt-image-2` is exposed because TheClawBay's latest docs list it as the direct image-generation model for `POST /v1/images/generations`. Other native image-generation models returned by discovery, such as `gpt-image-1.5`, remain hidden until this extension has a dedicated, tested flow for them.
 
 ## Usage
 
@@ -173,7 +174,7 @@ Use `/model` command in pi:
 /model theclawbay/gpt-image-2
 ```
 
-Gemini model IDs appear only when TheClawBay returns them from live discovery or the local discovery cache. When `gpt-image-2` is selected, Pi receives a normal assistant message event sequence and the generated PNG is saved locally. Set `PI_CLAWBAY_IMAGE_DIR` to override the output directory; otherwise images are saved under Pi's generated-files directory. Transient hosted image failures are retried up to 5 times by default. Partial images are not reported as success unless `PI_CLAWBAY_IMAGE_ALLOW_PARTIAL=1` is set.
+Gemini model IDs appear only when TheClawBay returns them from live discovery or the local discovery cache. When `gpt-image-2` is selected, Pi receives a normal assistant message event sequence and the generated PNG is saved locally. Set `PI_CLAWBAY_IMAGE_DIR` to override the output directory; otherwise images are saved under Pi's generated-files directory. Transient direct image failures are retried up to 5 times by default.
 
 ### Commands
 
@@ -214,11 +215,11 @@ export default function (pi: ExtensionAPI) {
 |--------------|------------------|----------|
 | `theclawbay/gpt-*`, `theclawbay/*codex*` | `https://api.theclawbay.com/backend-api/codex` | Custom Codex Responses transport (`theclawbay-codex-responses`) |
 | `theclawbay/gemini-*` | `https://api.theclawbay.com/v1beta` | Pi `google-generative-ai` transport |
-| `theclawbay/gpt-image-2` | `https://api.theclawbay.com/backend-api/codex/responses` | Hosted Responses `image_generation` |
+| `theclawbay/gpt-image-2` | `https://api.theclawbay.com/v1/images/generations` | Direct OpenAI-compatible Images API |
 
 ### Authentication
 
-All model families use the same `THECLAWBAY_API_KEY` value. GPT/Codex and hosted image requests use Bearer token authentication:
+All model families use the same `THECLAWBAY_API_KEY` value. GPT/Codex and direct image requests use Bearer token authentication:
 
 ```text
 Authorization: Bearer THECLAWBAY_API_KEY

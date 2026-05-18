@@ -5,7 +5,7 @@
  * Uses a single `theclawbay` provider with per-model routing:
  * - GPT/Codex: custom native Codex transport for prompt-cache hits
  * - Gemini: Pi's native google-generative-ai transport against TheClawBay /v1beta
- * - gpt-image-2: hosted Codex Responses image_generation tool
+ * - gpt-image-2: direct OpenAI-compatible Images API
  *
  * Features:
  * - /quota command to check detailed usage

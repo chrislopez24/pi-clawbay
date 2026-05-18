@@ -22,7 +22,6 @@ const originalApiKey = process.env.THECLAWBAY_API_KEY;
 const originalCacheDir = process.env.PI_CLAWBAY_CACHE_DIR;
 const originalImageDir = process.env.PI_CLAWBAY_IMAGE_DIR;
 const originalImageMaxRetries = process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES;
-const originalAllowPartial = process.env.PI_CLAWBAY_IMAGE_ALLOW_PARTIAL;
 const originalFetch = globalThis.fetch;
 process.env.PI_CLAWBAY_CACHE_DIR = cacheDir;
 process.env.PI_CLAWBAY_IMAGE_DIR = imageDir;
@@ -515,22 +514,14 @@ try {
   const oneByOnePngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
   let imageRequest;
   globalThis.fetch = async (url, init) => {
-    if (String(url).endsWith('/responses')) {
-      imageRequest = { url: String(url), body: JSON.parse(String(init.body)) };
-      return new Response([
-        'event: response.created\n',
-        'data: {"type":"response.created","response":{"id":"resp-image"}}\n\n',
-        'event: response.output_item.added\n',
-        'data: {"type":"response.output_item.added","item":{"id":"ig-test","type":"image_generation_call","status":"in_progress"}}\n\n',
-        'event: response.image_generation_call.partial_image\n',
-        `data: {"type":"response.image_generation_call.partial_image","item_id":"ig-test","partial_image_index":0,"partial_image_b64":"${oneByOnePngBase64}"}\n\n`,
-        'event: response.output_item.done\n',
-        `data: {"type":"response.output_item.done","item":{"id":"ig-test","type":"image_generation_call","status":"completed","result":"${oneByOnePngBase64}","revised_prompt":"A tiny test PNG."}}\n\n`,
-        'event: response.completed\n',
-        'data: {"type":"response.completed","response":{"id":"resp-image","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5,"input_tokens_details":{"cached_tokens":0}}}}\n\n',
-      ].join(''), {
+    if (String(url).endsWith('/images/generations')) {
+      imageRequest = { url: String(url), body: JSON.parse(String(init.body)), headers: Object.fromEntries(new Headers(init.headers).entries()) };
+      return new Response(JSON.stringify({
+        created: 123,
+        data: [{ b64_json: oneByOnePngBase64, revised_prompt: 'A tiny test PNG.' }],
+      }), {
         status: 200,
-        headers: { 'content-type': 'text/event-stream' },
+        headers: { 'content-type': 'application/json' },
       });
     }
     throw new Error(`unexpected image fetch ${url}`);
@@ -557,23 +548,21 @@ try {
   }
   assert.deepEqual(
     imageEvents.map((event) => event.type),
-    ['start', 'text_start', 'text_delta', 'text_delta', 'text_delta', 'text_delta', 'text_delta', 'text_end', 'done'],
+    ['start', 'text_start', 'text_delta', 'text_delta', 'text_delta', 'text_delta', 'text_end', 'done'],
     'image generation should emit visible progress deltas before the final assistant message',
   );
   assert.match(textDeltas(imageEvents), /🎨 Preparing image request/, 'image generation should announce request preparation');
   assert.match(textDeltas(imageEvents), /🖌️ Generating image/, 'image generation should announce generation start');
-  assert.match(textDeltas(imageEvents), /✨ Refining image/, 'image generation should announce partial image refinement');
   assert.match(textDeltas(imageEvents), /💾 Saving final image/, 'image generation should announce final save');
   const imageDone = imageEvents.find((event) => event.type === 'done');
-  assert.equal(imageRequest.url, 'https://api.theclawbay.com/backend-api/codex/responses');
-  assert.equal(imageRequest.body.model, 'gpt-5.5');
-  assert.equal(imageRequest.body.input[0].content[0].text, 'Draw a tiny test PNG.');
-  assert.equal(imageRequest.body.stream, true);
-  assert.deepEqual(
-    imageRequest.body.tools[0],
-    { type: 'image_generation', model: 'gpt-image-2', output_format: 'png', size: '1024x1024', partial_images: 2 },
-    'gpt-image-2 should use the hosted Responses image_generation tool to avoid Images API socket timeouts',
-  );
+  assert.equal(imageRequest.url, 'https://api.theclawbay.com/v1/images/generations');
+  assert.equal(imageRequest.headers.authorization, 'Bearer test-key');
+  assert.equal(imageRequest.body.model, 'gpt-image-2');
+  assert.equal(imageRequest.body.prompt, 'Draw a tiny test PNG.');
+  assert.equal(imageRequest.body.size, '1024x1024');
+  assert.equal(imageRequest.body.n, 1);
+  assert.ok(!('stream' in imageRequest.body), 'direct Images API requests should not use Responses streaming fields');
+  assert.ok(!('tools' in imageRequest.body), 'direct Images API requests should not use the hosted image_generation tool');
   assert.ok(imageDone, 'image generation stream should finish successfully');
   assert.equal(imageDone.message.provider, 'theclawbay');
   assert.equal(imageDone.message.model, 'gpt-image-2');
@@ -581,36 +570,24 @@ try {
   assert.ok(generatedPath, 'image generation response should include the saved PNG path');
   assert.ok(existsSync(generatedPath), 'image generation should save the decoded PNG to disk');
 
-  const partialImageBase64 = Buffer.from('partial-image-bytes').toString('base64');
   const finalImageBase64 = Buffer.from('final-image-bytes').toString('base64');
   let retryImageAttempts = 0;
   globalThis.fetch = async (url) => {
-    if (String(url).endsWith('/responses')) {
+    if (String(url).endsWith('/images/generations')) {
       retryImageAttempts += 1;
       if (retryImageAttempts === 1) {
-        return new Response([
-          'event: response.created\n',
-          'data: {"type":"response.created","response":{"id":"resp-image-retry-1"}}\n\n',
-          'event: response.output_item.added\n',
-          'data: {"type":"response.output_item.added","item":{"id":"ig-retry","type":"image_generation_call","status":"in_progress"}}\n\n',
-          'event: response.image_generation_call.partial_image\n',
-          `data: {"type":"response.image_generation_call.partial_image","item_id":"ig-retry","partial_image_index":1,"partial_image_b64":"${partialImageBase64}"}\n\n`,
-          'event: response.failed\n',
-          'data: {"type":"response.failed","response":{"id":"resp-image-retry-1","status":"failed","error":{"message":"temporarily unavailable","type":"server_error","code":"service_unavailable"}}}\n\n',
-        ].join(''), {
-          status: 200,
-          headers: { 'content-type': 'text/event-stream' },
+        return new Response(JSON.stringify({ error: { message: 'temporarily unavailable' } }), {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
         });
       }
 
-      return new Response([
-        'event: response.created\n',
-        'data: {"type":"response.created","response":{"id":"resp-image-retry-2"}}\n\n',
-        'event: response.completed\n',
-        `data: {"type":"response.completed","response":{"id":"resp-image-retry-2","status":"completed","output":[{"id":"ig-final","type":"image_generation_call","status":"completed","result":"${finalImageBase64}","revised_prompt":"final revised protagonist"}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5,"input_tokens_details":{"cached_tokens":0}}}}\n\n`,
-      ].join(''), {
+      return new Response(JSON.stringify({
+        created: 456,
+        data: [{ b64_json: finalImageBase64, revised_prompt: 'final revised protagonist' }],
+      }), {
         status: 200,
-        headers: { 'content-type': 'text/event-stream' },
+        headers: { 'content-type': 'application/json' },
       });
     }
     throw new Error(`unexpected retry image fetch ${url}`);
@@ -636,35 +613,25 @@ try {
     retryImageEvents.push(event);
   }
   const retryImageDone = retryImageEvents.find((event) => event.type === 'done');
-  assert.equal(retryImageAttempts, 2, 'hosted image generation should retry transient response.failed events before saving partials');
+  assert.equal(retryImageAttempts, 2, 'direct image generation should retry transient HTTP failures');
   assert.match(textDeltas(retryImageEvents), /⚠️ Image service was temporarily busy\. Retrying/, 'retrying image generation should show a user-friendly retry progress message');
   assert.ok(retryImageDone, 'retried image generation stream should finish successfully');
   const retryImageText = retryImageDone.message.content[0].text;
-  assert.doesNotMatch(retryImageText, /Saved latest partial/, 'successful retry should save the final image instead of the earlier partial');
-  assert.match(retryImageText, /final revised protagonist/, 'final image from response.completed output should preserve revised_prompt');
+  assert.match(retryImageText, /final revised protagonist/, 'direct image response should preserve revised_prompt');
   const retryGeneratedPath = retryImageText.match(/`([^`]+\.png)`/)?.[1];
   assert.ok(retryGeneratedPath, 'retried image generation should include the saved PNG path');
-  assert.equal(readFileSync(retryGeneratedPath, 'utf8'), 'final-image-bytes', 'response.completed output result should be saved as the final image');
+  assert.equal(readFileSync(retryGeneratedPath, 'utf8'), 'final-image-bytes', 'direct image response b64_json should be saved as the final image');
 
-  process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES = '0';
-  delete process.env.PI_CLAWBAY_IMAGE_ALLOW_PARTIAL;
   globalThis.fetch = async (url) => {
-    if (String(url).endsWith('/responses')) {
-      return new Response([
-        'event: response.created\n',
-        'data: {"type":"response.created","response":{"id":"resp-image-partial-only"}}\n\n',
-        'event: response.image_generation_call.partial_image\n',
-        `data: {"type":"response.image_generation_call.partial_image","item_id":"ig-partial","partial_image_index":0,"partial_image_b64":"${partialImageBase64}"}\n\n`,
-        'event: response.failed\n',
-        'data: {"type":"response.failed","response":{"id":"resp-image-partial-only","status":"failed","error":{"message":"temporarily unavailable","type":"server_error","code":"service_unavailable"}}}\n\n',
-      ].join(''), {
+    if (String(url).endsWith('/images/generations')) {
+      return new Response(JSON.stringify({ created: 789, data: [{}] }), {
         status: 200,
-        headers: { 'content-type': 'text/event-stream' },
+        headers: { 'content-type': 'application/json' },
       });
     }
-    throw new Error(`unexpected partial-only image fetch ${url}`);
+    throw new Error(`unexpected malformed image fetch ${url}`);
   };
-  const partialOnlyStream = streamSimpleTheClawBayCodexResponses(
+  const malformedImageStream = streamSimpleTheClawBayCodexResponses(
     {
       id: 'gpt-image-2',
       name: 'GPT Image 2',
@@ -677,17 +644,16 @@ try {
       contextWindow: 272000,
       maxTokens: 65536,
     },
-    { messages: [{ role: 'user', content: 'Draw a partial-only image.', timestamp: 0 }] },
+    { messages: [{ role: 'user', content: 'Draw a malformed image.', timestamp: 0 }] },
     { apiKey: 'test-key' },
   );
-  const partialOnlyEvents = [];
-  for await (const event of partialOnlyStream) {
-    partialOnlyEvents.push(event);
+  const malformedImageEvents = [];
+  for await (const event of malformedImageStream) {
+    malformedImageEvents.push(event);
   }
-  const partialOnlyError = partialOnlyEvents.find((event) => event.type === 'error');
-  assert.ok(partialOnlyError, 'partial-only hosted image failures should not be reported as successful final images by default');
-  assert.match(partialOnlyError.error.errorMessage, /temporarily unavailable/);
-  delete process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES;
+  const malformedImageError = malformedImageEvents.find((event) => event.type === 'error');
+  assert.ok(malformedImageError, 'malformed direct image responses should not be reported as successful images');
+  assert.match(malformedImageError.error.errorMessage, /did not include an image/);
 
   const streamContext = createTheClawBayStreamContext(
     {
@@ -759,12 +725,6 @@ try {
     delete process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES;
   } else {
     process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES = originalImageMaxRetries;
-  }
-
-  if (originalAllowPartial === undefined) {
-    delete process.env.PI_CLAWBAY_IMAGE_ALLOW_PARTIAL;
-  } else {
-    process.env.PI_CLAWBAY_IMAGE_ALLOW_PARTIAL = originalAllowPartial;
   }
 
   globalThis.fetch = originalFetch;

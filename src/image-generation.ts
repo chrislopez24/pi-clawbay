@@ -11,44 +11,25 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import {
-	THECLAWBAY_CHATGPT_ACCOUNT_ID,
-	THECLAWBAY_CODEX_RESPONSES_URL,
-	MODEL_INPUTS,
-	OPENAI_CODEX_THINKING_LEVEL_MAP,
-	OPENAI_KNOWN_COSTS,
-} from "./constants.js";
+import { THECLAWBAY_IMAGES_GENERATIONS_URL } from "./constants.js";
 
-interface HostedImageGenerationResult {
-	base64: string;
-	revisedPrompt?: string;
-	usedPartial: boolean;
+interface DirectImageGenerationRequest {
+	model: string;
+	prompt: string;
+	size: string;
+	n: number;
 }
 
-interface HostedImageCandidate {
+interface DirectImageGenerationResult {
 	base64: string;
 	revisedPrompt?: string;
-	partialIndex?: number;
 }
 
 type ImageProgressCallback = (message: string) => void;
 
-const DEFAULT_IMAGE_RESPONSES_MODEL_ID = "gpt-5.5";
-const HOSTED_IMAGE_PARTIAL_COUNT = 2;
-const DEFAULT_HOSTED_IMAGE_MAX_RETRIES = 5;
-const ALLOW_PARTIAL_ENV = "PI_CLAWBAY_IMAGE_ALLOW_PARTIAL";
-
-class HostedImageGenerationStreamError extends Error {
-	readonly partial?: HostedImageCandidate;
-	readonly retryable: boolean;
-
-	constructor(message: string, options?: { partial?: HostedImageCandidate; retryable?: boolean }) {
-		super(message);
-		this.name = "HostedImageGenerationStreamError";
-		this.partial = options?.partial;
-		this.retryable = options?.retryable ?? false;
-	}
-}
+const DEFAULT_DIRECT_IMAGE_MAX_RETRIES = 5;
+const DIRECT_IMAGE_SIZE = "1024x1024";
+const RETRY_PROGRESS_MESSAGE = "⚠️ Image service was temporarily busy. Retrying…\n";
 
 export function getImageOutputDir(): string {
 	const overrideDir = process.env.PI_CLAWBAY_IMAGE_DIR?.trim();
@@ -112,11 +93,8 @@ function saveGeneratedPng(base64: string): { path: string; bytes: number } {
 	return { path, bytes: image.byteLength };
 }
 
-function formatSuccessMessage(path: string, bytes: number, revisedPrompt?: string, usedPartial = false): string {
+function formatSuccessMessage(path: string, bytes: number, revisedPrompt?: string): string {
 	const lines = [`Generated image saved to \`${path}\` (${bytes.toLocaleString()} bytes).`];
-	if (usedPartial) {
-		lines.push("Saved latest partial image because the final image was unavailable.");
-	}
 	if (revisedPrompt) {
 		lines.push(`Revised prompt: ${revisedPrompt}`);
 	}
@@ -128,303 +106,157 @@ async function requestImageGeneration(
 	context: Context,
 	options?: SimpleStreamOptions,
 	onProgress?: ImageProgressCallback
-): Promise<{ path: string; bytes: number; revisedPrompt?: string; usedPartial: boolean }> {
+): Promise<{ path: string; bytes: number; revisedPrompt?: string }> {
 	const apiKey = options?.apiKey ?? process.env.THECLAWBAY_API_KEY;
 	if (!apiKey) {
 		throw new Error("No API key for provider: theclawbay");
 	}
 
 	onProgress?.("🎨 Preparing image request…\n");
-	const body = await buildHostedImageRequestBody(model, context, options);
-	const payload = await fetchHostedImageGeneration(model, apiKey, body, options, onProgress);
+	const body = await buildDirectImageRequestBody(model, context, options);
+	const payload = await fetchDirectImageGeneration(model, apiKey, body, options, onProgress);
 	onProgress?.("💾 Saving final image…\n");
 	const saved = saveGeneratedPng(payload.base64);
-	return { ...saved, revisedPrompt: payload.revisedPrompt, usedPartial: payload.usedPartial };
+	return { ...saved, revisedPrompt: payload.revisedPrompt };
 }
 
-async function buildHostedImageRequestBody(model: Model<Api>, context: Context, options?: SimpleStreamOptions): Promise<unknown> {
+async function buildDirectImageRequestBody(model: Model<Api>, context: Context, options?: SimpleStreamOptions): Promise<unknown> {
 	const prompt = extractPrompt(context);
 	if (!prompt) {
 		throw new Error("gpt-image-2 requires a non-empty user prompt");
 	}
 
-	const body = {
-		model: getImageResponsesModelId(),
-		store: false,
-		stream: true,
-		instructions: context.systemPrompt,
-		input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-		tools: [
-			{
-				type: "image_generation",
-				model: model.id,
-				output_format: "png",
-				size: "1024x1024",
-				partial_images: HOSTED_IMAGE_PARTIAL_COUNT,
-			},
-		],
-		tool_choice: "auto",
-		parallel_tool_calls: true,
-		text: { verbosity: "low" },
-		include: ["reasoning.encrypted_content"],
-		...(options?.sessionId ? { prompt_cache_key: options.sessionId } : {}),
+	const body: DirectImageGenerationRequest = {
+		model: model.id,
+		prompt,
+		size: DIRECT_IMAGE_SIZE,
+		n: 1,
 	};
 	return (await options?.onPayload?.(body, model)) ?? body;
 }
 
-function buildHostedRequestHeaders(apiKey: string, options?: SimpleStreamOptions): Record<string, string> {
+function buildDirectRequestHeaders(apiKey: string, options?: SimpleStreamOptions): Record<string, string> {
 	return {
 		...(options?.headers ?? {}),
 		Authorization: `Bearer ${apiKey}`,
 		"Content-Type": "application/json",
-		"chatgpt-account-id": THECLAWBAY_CHATGPT_ACCOUNT_ID,
-		originator: "pi",
-		"OpenAI-Beta": "responses=experimental",
-		...(options?.sessionId ? { session_id: options.sessionId } : {}),
 	};
 }
 
-function createHostedRequestModel(model: Model<Api>): Model<Api> {
-	const requestModelId = getImageResponsesModelId();
-	return {
-		...model,
-		id: requestModelId,
-		name: requestModelId,
-		reasoning: true,
-		input: [...MODEL_INPUTS],
-		cost: OPENAI_KNOWN_COSTS[requestModelId] ?? model.cost,
-		thinkingLevelMap: { ...OPENAI_CODEX_THINKING_LEVEL_MAP },
-	};
-}
-
-function getImageResponsesModelId(): string {
-	return process.env.PI_CLAWBAY_IMAGE_RESPONSES_MODEL?.trim() || DEFAULT_IMAGE_RESPONSES_MODEL_ID;
-}
-
-async function fetchHostedImageGeneration(
+async function fetchDirectImageGeneration(
 	model: Model<Api>,
 	apiKey: string,
 	body: unknown,
 	options?: SimpleStreamOptions,
 	onProgress?: ImageProgressCallback
-): Promise<HostedImageGenerationResult> {
-	let latestPartial: HostedImageCandidate | undefined;
+): Promise<DirectImageGenerationResult> {
 	let lastError: unknown;
-	const maxRetries = getHostedImageMaxRetries();
+	const maxRetries = getDirectImageMaxRetries();
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		onProgress?.("🖌️ Generating image…\n");
-		const response = await fetch(THECLAWBAY_CODEX_RESPONSES_URL, {
+		const response = await trySendDirectImageRequest(apiKey, body, options);
+		if (response instanceof Error) {
+			lastError = response;
+			if (!shouldRetryDirectImageRequest(attempt, maxRetries, undefined, options)) {
+				throw response;
+			}
+			onProgress?.(RETRY_PROGRESS_MESSAGE);
+			continue;
+		}
+
+		await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+		if (response.ok) {
+			return readDirectImageGenerationResponse(await response.json());
+		}
+
+		lastError = new Error(await readImageErrorMessage(response));
+		if (!shouldRetryDirectImageRequest(attempt, maxRetries, response.status, options)) {
+			throw lastError;
+		}
+		onProgress?.(RETRY_PROGRESS_MESSAGE);
+	}
+
+	throw lastError instanceof Error ? lastError : new Error("TheClawBay direct image generation failed");
+}
+
+async function trySendDirectImageRequest(
+	apiKey: string,
+	body: unknown,
+	options?: SimpleStreamOptions
+): Promise<Response | Error> {
+	try {
+		return await fetch(THECLAWBAY_IMAGES_GENERATIONS_URL, {
 			method: "POST",
-			headers: buildHostedRequestHeaders(apiKey, options),
+			headers: buildDirectRequestHeaders(apiKey, options),
 			body: JSON.stringify(body),
 			signal: options?.signal,
 		});
-		await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, createHostedRequestModel(model));
-		if (!response.ok) {
-			const message = await response.text();
-			if (attempt < maxRetries && isRetryableHttpStatus(response.status)) {
-				lastError = new Error(message);
-				onProgress?.("⚠️ Image service was temporarily busy. Retrying…\n");
-				continue;
-			}
-			throw new Error(message);
-		}
-
-		try {
-			return await readHostedImageGenerationStream(response, onProgress);
-		} catch (error) {
-			lastError = error;
-			if (error instanceof HostedImageGenerationStreamError && error.partial) {
-				latestPartial = error.partial;
-			}
-			if (error instanceof HostedImageGenerationStreamError && error.retryable && attempt < maxRetries && !options?.signal?.aborted) {
-				onProgress?.("⚠️ Image service was temporarily busy. Retrying…\n");
-				continue;
-			}
-			break;
-		}
+	} catch (error) {
+		return error instanceof Error ? error : new Error(String(error));
 	}
-
-	if (latestPartial && isPartialImageFallbackEnabled()) {
-		return { ...latestPartial, usedPartial: true };
-	}
-	throw lastError instanceof Error ? lastError : new Error("TheClawBay hosted image generation failed");
 }
 
-async function readHostedImageGenerationStream(
-	response: Response,
-	onProgress?: ImageProgressCallback
-): Promise<HostedImageGenerationResult> {
-	let finalImage: HostedImageCandidate | undefined;
-	let latestPartial: HostedImageCandidate | undefined;
-	let completed = false;
-
-	for await (const event of parseTheClawBaySse(response)) {
-		const eventType = typeof event.type === "string" ? event.type : undefined;
-		if (eventType === "response.image_generation_call.partial_image" && typeof event.partial_image_b64 === "string") {
-			latestPartial = {
-				base64: event.partial_image_b64,
-				partialIndex: typeof event.partial_image_index === "number" ? event.partial_image_index : undefined,
-			};
-			onProgress?.("✨ Refining image…\n");
-			continue;
-		}
-
-		if (eventType === "response.output_item.done" && isRecord(event.item) && event.item.type === "image_generation_call") {
-			if (typeof event.item.result === "string" && event.item.result.length > 0) {
-				finalImage = {
-					base64: event.item.result,
-					revisedPrompt: typeof event.item.revised_prompt === "string" ? event.item.revised_prompt : undefined,
-				};
-			}
-			continue;
-		}
-
-		if (eventType === "response.completed") {
-			if (isRecord(event.response)) {
-				const completedImage = extractFinalImageFromResponse(event.response);
-				if (completedImage) {
-					finalImage = completedImage;
-				}
-			}
-			completed = true;
-			continue;
-		}
-
-		if (eventType === "response.failed") {
-			throw new HostedImageGenerationStreamError(readResponseFailureMessage(event, "TheClawBay hosted image generation failed"), {
-				partial: latestPartial,
-				retryable: isRetryableResponseFailure(event),
-			});
-		}
-
-		if (eventType === "error") {
-			throw new HostedImageGenerationStreamError(readResponseFailureMessage(event, "TheClawBay hosted image generation stream error"), {
-				partial: latestPartial,
-				retryable: true,
-			});
-		}
+function readDirectImageGenerationResponse(response: unknown): DirectImageGenerationResult {
+	if (!isRecord(response) || !Array.isArray(response.data)) {
+		throw new Error("TheClawBay direct image generation response did not include an image");
 	}
 
-	if (finalImage) {
-		return { ...finalImage, usedPartial: false };
-	}
-	if (latestPartial) {
-		throw new HostedImageGenerationStreamError("TheClawBay hosted image generation completed without a final image", {
-			partial: latestPartial,
-			retryable: true,
-		});
-	}
-	if (!completed) {
-		throw new Error("TheClawBay hosted image generation stream ended before completion");
-	}
-	throw new Error("TheClawBay hosted image generation response did not include an image");
-}
-
-function extractFinalImageFromResponse(response: Record<string, unknown>): HostedImageCandidate | undefined {
-	const output = Array.isArray(response.output) ? response.output : [];
-	for (const item of output) {
-		if (!isRecord(item) || item.type !== "image_generation_call" || typeof item.result !== "string" || item.result.length === 0) {
+	for (const item of response.data) {
+		if (!isRecord(item) || typeof item.b64_json !== "string" || item.b64_json.length === 0) {
 			continue;
 		}
 
 		return {
-			base64: item.result,
+			base64: item.b64_json,
 			revisedPrompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
 		};
 	}
-	return undefined;
+
+	throw new Error("TheClawBay direct image generation response did not include an image");
 }
 
-function getHostedImageMaxRetries(): number {
+async function readImageErrorMessage(response: Response): Promise<string> {
+	const text = await response.text();
+	try {
+		const parsed = JSON.parse(text) as unknown;
+		const error = isRecord(parsed) && isRecord(parsed.error) ? parsed.error : undefined;
+		if (typeof error?.message === "string" && error.message.trim()) {
+			return error.message;
+		}
+	} catch {
+		// Fall through to raw response text.
+	}
+	return text.trim() || `TheClawBay image generation failed with HTTP ${response.status}`;
+}
+
+function getDirectImageMaxRetries(): number {
 	const value = process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES?.trim();
 	if (!value) {
-		return DEFAULT_HOSTED_IMAGE_MAX_RETRIES;
+		return DEFAULT_DIRECT_IMAGE_MAX_RETRIES;
 	}
 	const parsed = Number.parseInt(value, 10);
-	return Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, 5)) : DEFAULT_HOSTED_IMAGE_MAX_RETRIES;
+	return Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, 5)) : DEFAULT_DIRECT_IMAGE_MAX_RETRIES;
 }
 
-function isPartialImageFallbackEnabled(): boolean {
-	const value = process.env[ALLOW_PARTIAL_ENV]?.trim().toLowerCase();
-	return value === "1" || value === "true" || value === "yes" || value === "on";
+function shouldRetryDirectImageRequest(
+	attempt: number,
+	maxRetries: number,
+	status?: number,
+	options?: SimpleStreamOptions
+): boolean {
+	if (attempt >= maxRetries || options?.signal?.aborted) {
+		return false;
+	}
+	return status === undefined || isRetryableHttpStatus(status);
 }
 
 function isRetryableHttpStatus(status: number): boolean {
 	return status === 408 || status === 409 || status === 429 || status >= 500;
 }
 
-function isRetryableResponseFailure(event: Record<string, unknown>): boolean {
-	const response = isRecord(event.response) ? event.response : undefined;
-	const error = isRecord(response?.error) ? response.error : undefined;
-	const code = typeof error?.code === "string" ? error.code : "";
-	const type = typeof error?.type === "string" ? error.type : "";
-	return code === "service_unavailable" || code === "proxy_request_failed" || type === "server_error";
-}
-
-async function* parseTheClawBaySse(response: Response): AsyncGenerator<Record<string, unknown>> {
-	if (!response.body) {
-		return;
-	}
-
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
-
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) {
-				break;
-			}
-
-			buffer += decoder.decode(value, { stream: true });
-			let index = buffer.indexOf("\n\n");
-			while (index !== -1) {
-				const chunk = buffer.slice(0, index);
-				buffer = buffer.slice(index + 2);
-				const data = chunk
-					.split("\n")
-					.filter((line) => line.startsWith("data:"))
-					.map((line) => line.slice(5).trim())
-					.join("\n")
-					.trim();
-
-				if (data && data !== "[DONE]") {
-					yield JSON.parse(data) as Record<string, unknown>;
-				}
-				index = buffer.indexOf("\n\n");
-			}
-		}
-	} finally {
-		try {
-			await reader.cancel();
-		} catch {
-			// Ignore stream cleanup errors.
-		}
-		try {
-			reader.releaseLock();
-		} catch {
-			// Ignore stream cleanup errors.
-		}
-	}
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function readResponseFailureMessage(event: Record<string, unknown>, fallback: string): string {
-	const response = isRecord(event.response) ? event.response : undefined;
-	const error = isRecord(response?.error) ? response.error : undefined;
-	if (typeof error?.message === "string" && error.message.trim()) {
-		return error.message;
-	}
-	if (typeof event.message === "string" && event.message.trim()) {
-		return event.message;
-	}
-	return fallback;
 }
 
 export function streamSimpleTheClawBayImageGeneration(
@@ -450,7 +282,7 @@ export function streamSimpleTheClawBayImageGeneration(
 			stream.push({ type: "start", partial: output });
 			stream.push({ type: "text_start", contentIndex: 0, partial: output });
 			const result = await requestImageGeneration(model, context, options, appendTextDelta);
-			const text = formatSuccessMessage(result.path, result.bytes, result.revisedPrompt, result.usedPartial);
+			const text = formatSuccessMessage(result.path, result.bytes, result.revisedPrompt);
 			appendTextDelta(text);
 			const block = output.content[0];
 			const content = block?.type === "text" ? block.text : text;
