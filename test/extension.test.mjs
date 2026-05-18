@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { streamSimpleGoogle } from '@earendil-works/pi-ai';
 import extension from '../dist/index.js';
 import { createGoogleModelConfig, isGoogleModelId } from '../dist/google-models.js';
@@ -25,6 +26,10 @@ const originalImageMaxRetries = process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES;
 const originalFetch = globalThis.fetch;
 process.env.PI_CLAWBAY_CACHE_DIR = cacheDir;
 process.env.PI_CLAWBAY_IMAGE_DIR = imageDir;
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 function createPi(registrations, commands = {}) {
   return {
@@ -566,8 +571,13 @@ try {
   assert.ok(imageDone, 'image generation stream should finish successfully');
   assert.equal(imageDone.message.provider, 'theclawbay');
   assert.equal(imageDone.message.model, 'gpt-image-2');
-  const generatedPath = imageDone.message.content[0].text.match(/`([^`]+\.png)`/)?.[1];
+  const imageText = imageDone.message.content[0].text;
+  const generatedPath = imageText.match(/`([^`]+\.png)`/)?.[1];
   assert.ok(generatedPath, 'image generation response should include the saved PNG path');
+  const markdownLinkPattern = new RegExp(
+    `\\[${escapeRegExp(basename(generatedPath))}\\]\\(${escapeRegExp(pathToFileURL(generatedPath).href)}\\)`,
+  );
+  assert.match(imageText, markdownLinkPattern, 'image generation response should include a clickable file:// markdown link');
   assert.ok(existsSync(generatedPath), 'image generation should save the decoded PNG to disk');
 
   const finalImageBase64 = Buffer.from('final-image-bytes').toString('base64');

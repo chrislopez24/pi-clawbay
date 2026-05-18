@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
 	createAssistantMessageEventStream,
 	type Api,
@@ -94,7 +95,12 @@ function saveGeneratedPng(base64: string): { path: string; bytes: number } {
 }
 
 function formatSuccessMessage(path: string, bytes: number, revisedPrompt?: string): string {
-	const lines = [`Generated image saved to \`${path}\` (${bytes.toLocaleString()} bytes).`];
+	const fileName = basename(path);
+	const fileUrl = pathToFileURL(path).href;
+	const lines = [
+		`Generated image saved: [${fileName}](${fileUrl}) (${bytes.toLocaleString()} bytes).`,
+		`Path: \`${path}\``,
+	];
 	if (revisedPrompt) {
 		lines.push(`Revised prompt: ${revisedPrompt}`);
 	}
