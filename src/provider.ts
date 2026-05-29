@@ -6,7 +6,7 @@ export function registerProviders(pi: ExtensionAPI, openaiModels: ProviderModelC
 	pi.registerProvider("theclawbay", {
 		name: "TheClawBay",
 		baseUrl: THECLAWBAY_CODEX_BASE_URL,
-		apiKey: "THECLAWBAY_API_KEY",
+		apiKey: "$THECLAWBAY_API_KEY",
 		api: THECLAWBAY_CODEX_API,
 		streamSimple: streamSimpleTheClawBayCodexResponses,
 		models: openaiModels,
