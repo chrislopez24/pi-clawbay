@@ -92,6 +92,7 @@ function normalizeCachedModelEntry(entry: unknown): TheClawBayModelMetadata | nu
 	return {
 		id: source.id.trim(),
 		...(typeof source.name === "string" && source.name.trim().length > 0 ? { name: source.name.trim() } : {}),
+		...(isPositiveInteger(source.contextWindow) ? { contextWindow: source.contextWindow } : {}),
 		...(typeof source.supportsReasoning === "boolean" ? { supportsReasoning: source.supportsReasoning } : {}),
 		...(Array.isArray(source.supportedReasoningEfforts)
 			? { supportedReasoningEfforts: source.supportedReasoningEfforts.filter(isNonEmptyString) }
@@ -165,6 +166,7 @@ function extractModelMetadata(payload: OpenAIModelListResponse): TheClawBayModel
 			return {
 				id,
 				...(typeof entry.display_name === "string" && entry.display_name.trim().length > 0 ? { name: entry.display_name.trim() } : {}),
+				...(isPositiveInteger(entry.context_window) ? { contextWindow: entry.context_window } : {}),
 				...(typeof entry.supports_reasoning === "boolean" ? { supportsReasoning: entry.supports_reasoning } : {}),
 				...(Array.isArray(entry.supported_reasoning_efforts)
 					? { supportedReasoningEfforts: entry.supported_reasoning_efforts.filter(isNonEmptyString) }
@@ -179,6 +181,10 @@ function extractModelMetadata(payload: OpenAIModelListResponse): TheClawBayModel
 
 function isNonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value.trim().length > 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 export async function refreshProviderModelsNow(pi: ExtensionAPI, apiKey: string): Promise<number | null> {

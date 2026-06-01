@@ -194,6 +194,10 @@ function buildThinkingLevelMap(efforts: string[]): ThinkingLevelMap {
 	};
 }
 
+function resolveContextWindow(metadata: TheClawBayModelMetadata, fallback: number): number {
+	return metadata.contextWindow ?? fallback;
+}
+
 function createOpenAIModel(source: ModelSource): ProviderModelConfig {
 	const metadata = toModelMetadata(source);
 	const id = metadata.id;
@@ -202,7 +206,7 @@ function createOpenAIModel(source: ModelSource): ProviderModelConfig {
 	const options = { reasoning: resolveReasoning(metadata), thinkingLevelMap: resolveThinkingLevelMap(metadata) };
 
 	if (id === GPT_54_DEFAULT_MODEL_ID) {
-		return createModelConfig(id, name, cost, OPENAI_CODEX_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS, options);
+		return createModelConfig(id, name, cost, resolveContextWindow(metadata, OPENAI_CODEX_CONTEXT_WINDOW), OPENAI_DEFAULT_MAX_TOKENS, options);
 	}
 
 	if (id === GPT_54_1M_MODEL_ID) {
@@ -210,14 +214,14 @@ function createOpenAIModel(source: ModelSource): ProviderModelConfig {
 	}
 
 	if (id === GPT_IMAGE_2_MODEL_ID) {
-		return createModelConfig(id, name, cost, OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_IMAGE_MAX_TOKENS, options);
+		return createModelConfig(id, name, cost, resolveContextWindow(metadata, OPENAI_DEFAULT_CONTEXT_WINDOW), OPENAI_IMAGE_MAX_TOKENS, options);
 	}
 
 	if (isGoogleModelId(id)) {
 		return createGoogleModelConfig({ id, name, cost });
 	}
 
-	return createModelConfig(id, name, cost, OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS, options);
+	return createModelConfig(id, name, cost, resolveContextWindow(metadata, OPENAI_DEFAULT_CONTEXT_WINDOW), OPENAI_DEFAULT_MAX_TOKENS, options);
 }
 
 export function buildOpenAIModels(sources: ModelSource[]): ProviderModelConfig[] {
@@ -268,7 +272,7 @@ function normalizeOpenAIModelMetadataEntry(model: TheClawBayModelMetadata): TheC
 	if (id === GPT_54_UPSTREAM_MODEL_ID) {
 		return [
 			{ ...normalized, id: GPT_54_DEFAULT_MODEL_ID, name: model.name || formatOpenAIModelName(GPT_54_DEFAULT_MODEL_ID) },
-			{ ...normalized, id: GPT_54_1M_MODEL_ID, name: formatOpenAIModelName(GPT_54_1M_MODEL_ID) },
+			{ ...normalized, id: GPT_54_1M_MODEL_ID, name: formatOpenAIModelName(GPT_54_1M_MODEL_ID), contextWindow: OPENAI_FRONTIER_CONTEXT_WINDOW },
 		];
 	}
 

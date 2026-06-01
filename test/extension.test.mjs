@@ -72,6 +72,7 @@ try {
               {
                 id: 'gpt-5.5',
                 display_name: 'GPT-5.5',
+                context_window: 384000,
                 supports_reasoning: true,
                 supported_reasoning_efforts: ['low', 'medium', 'high', 'xhigh'],
                 default_reasoning_effort: 'xhigh',
@@ -80,6 +81,7 @@ try {
               {
                 id: 'gpt-5.4',
                 display_name: 'GPT-5.4',
+                context_window: 272000,
                 supports_reasoning: true,
                 supported_reasoning_efforts: ['minimal', 'low', 'medium', 'high'],
                 default_reasoning_effort: 'medium',
@@ -121,10 +123,12 @@ try {
     'gemini-3-pro-preview',
   ]);
   const liveGpt55 = firstRegistrations[1].config.models.find((entry) => entry.id === 'gpt-5.5');
+  assert.equal(liveGpt55?.contextWindow, 384000, 'live context_window should override the default Codex context window');
   assert.equal(liveGpt55?.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should expose xhigh from live metadata');
   assert.equal(liveGpt55?.thinkingLevelMap?.minimal, 'low', 'gpt-5.5 should map minimal to low when only low is supported upstream');
   for (const id of ['gpt-5.4', 'gpt-5.4[1m]']) {
     const model = firstRegistrations[1].config.models.find((entry) => entry.id === id);
+    assert.equal(model?.contextWindow, id === 'gpt-5.4[1m]' ? 1050000 : 272000, `${id} should use its expected context window`);
     assert.equal(model?.thinkingLevelMap?.xhigh, null, `${id} should not expose unsupported xhigh thinking`);
     assert.equal(model?.thinkingLevelMap?.minimal, 'minimal', `${id} should preserve upstream minimal thinking`);
   }
@@ -142,12 +146,15 @@ try {
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
   assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview']);
+  assert.equal(cache.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000, 'cache should preserve live context metadata');
+  assert.equal(cache.models.find((model) => model.id === 'gpt-5.4[1m]')?.contextWindow, 1050000, 'cache should preserve the local 1m context override');
   assert.equal(cache.models.find((model) => model.id === 'gemini-3-pro-preview')?.supportsReasoning, false, 'cache should preserve live reasoning metadata');
 
   globalThis.fetch = async () => ({ ok: false, async json() { return {}; } });
   const secondRegistrations = [];
   extension(createPi(secondRegistrations));
   assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview']);
+  assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gemini-3-pro-preview')?.reasoning, true);
 
   const staleCacheTime = Date.now() + 7 * 60 * 60 * 1000;
@@ -161,6 +168,11 @@ try {
     readCachedModelMetadata(staleCacheTime, { allowStale: true }).find((model) => model.id === 'gemini-3-pro-preview')?.supportsReasoning,
     false,
     'stale startup cache should preserve Gemini metadata',
+  );
+  assert.equal(
+    readCachedModelMetadata(staleCacheTime, { allowStale: true }).find((model) => model.id === 'gpt-5.5')?.contextWindow,
+    384000,
+    'stale startup cache should preserve context metadata',
   );
 
   writeFileSync(
@@ -201,7 +213,7 @@ try {
   await waitForRefresh();
   assert.equal(staleRegistrations.length, 1, 'stale extension refresh should not crash after initial registration');
 
-  globalThis.fetch = async () => ({ ok: true, async json() { return { data: [{ id: 'gpt-5.4-mini' }] }; } });
+  globalThis.fetch = async () => ({ ok: true, async json() { return { data: [{ id: 'gpt-5.4-mini', context_window: 512000 }] }; } });
   const refreshCommands = {};
   const refreshRegistrations = [];
   extension(createPi(refreshRegistrations, refreshCommands));
@@ -217,6 +229,7 @@ try {
     },
   });
   assert.deepEqual(refreshRegistrations.map((entry) => entry.config.models.map((model) => model.id)), [['gpt-5.4-mini']]);
+  assert.equal(refreshRegistrations[0].config.models[0].contextWindow, 512000, 'manual refresh should apply live context metadata');
   assert.deepEqual(refreshNotifications, [{ message: 'Refreshed 1 TheClawBay model from live discovery', level: 'info' }]);
 
   globalThis.fetch = async (url) => {
