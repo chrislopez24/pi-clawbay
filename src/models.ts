@@ -17,6 +17,7 @@ import {
 	PINNED_MODEL_IDS,
 	ZERO_COST,
 } from "./constants.js";
+import { createDeepSeekModelConfig, formatDeepSeekModelName, isDeepSeekModelId } from "./deepseek-models.js";
 import { createGoogleModelConfig, isGoogleModelId, resolveGoogleThinkingLevelMap, supportsGoogleThinking } from "./google-models.js";
 import type { TheClawBayModelMetadata } from "./types.js";
 
@@ -96,6 +97,10 @@ function formatGenericModelName(id: string): string {
 		return `GPT-${suffix}`;
 	}
 
+	if (isDeepSeekModelId(id)) {
+		return formatDeepSeekModelName(id, formatModelNamePart);
+	}
+
 	return id.split("-").map(formatModelNamePart).join(" ");
 }
 
@@ -130,7 +135,12 @@ function createModelConfig(
 	cost: ProviderModelConfig["cost"],
 	contextWindow: number,
 	maxTokens: number,
-	options?: { api?: ProviderModelConfig["api"]; baseUrl?: string; reasoning?: boolean; thinkingLevelMap?: ThinkingLevelMap }
+	options?: {
+		api?: ProviderModelConfig["api"];
+		baseUrl?: string;
+		reasoning?: boolean;
+		thinkingLevelMap?: ThinkingLevelMap;
+	}
 ): ProviderModelConfig {
 	const isImageModel = isSupportedImageGenerationModel(id);
 	const isReasoningModel = options?.reasoning ?? !isImageModel;
@@ -190,7 +200,7 @@ function buildThinkingLevelMap(efforts: string[]): ThinkingLevelMap {
 		low: supported.has("low") ? "low" : null,
 		medium: supported.has("medium") ? "medium" : null,
 		high: supported.has("high") ? "high" : null,
-		xhigh: supported.has("xhigh") ? "xhigh" : null,
+		xhigh: supported.has("xhigh") ? "xhigh" : supported.has("max") ? "max" : null,
 	};
 }
 
@@ -219,6 +229,10 @@ function createOpenAIModel(source: ModelSource): ProviderModelConfig {
 
 	if (isGoogleModelId(id)) {
 		return createGoogleModelConfig({ id, name, cost });
+	}
+
+	if (isDeepSeekModelId(id)) {
+		return createDeepSeekModelConfig(metadata, name, cost, options.thinkingLevelMap);
 	}
 
 	return createModelConfig(id, name, cost, resolveContextWindow(metadata, OPENAI_DEFAULT_CONTEXT_WINDOW), OPENAI_DEFAULT_MAX_TOKENS, options);

@@ -87,6 +87,14 @@ try {
                 default_reasoning_effort: 'medium',
               },
               {
+                id: 'deepseek-v4-flash',
+                display_name: 'DeepSeek V4 Flash',
+                context_window: 164000,
+                supports_reasoning: true,
+                supported_reasoning_efforts: ['low', 'medium', 'high', 'max'],
+                default_reasoning_effort: 'high',
+              },
+              {
                 id: 'gemini-3-pro-preview',
                 display_name: 'Gemini 3 Pro Preview',
                 supports_reasoning: false,
@@ -120,6 +128,7 @@ try {
     'gpt-image-2',
     'gpt-5.4',
     'gpt-5.4[1m]',
+    'deepseek-v4-flash',
     'gemini-3-pro-preview',
   ]);
   const liveGpt55 = firstRegistrations[1].config.models.find((entry) => entry.id === 'gpt-5.5');
@@ -143,25 +152,41 @@ try {
   );
   assert.equal(liveGemini?.contextWindow, 1048576, 'Gemini models should use the native Gemini context window');
   assert.equal(liveGemini?.maxTokens, 65536, 'Gemini models should use the native Gemini output limit');
+  const liveDeepSeek = firstRegistrations[1].config.models.find((entry) => entry.id === 'deepseek-v4-flash');
+  assert.equal(liveDeepSeek?.api, 'openai-completions', 'DeepSeek models should use Pi OpenAI chat completions compatibility');
+  assert.equal(liveDeepSeek?.baseUrl, 'https://api.theclawbay.com/v1', 'DeepSeek models should use TheClawBay OpenAI-compatible base URL');
+  assert.equal(liveDeepSeek?.reasoning, true, 'DeepSeek reasoning metadata should be preserved');
+  assert.deepEqual(
+    liveDeepSeek?.compat,
+    {
+      supportsDeveloperRole: false,
+      requiresReasoningContentOnAssistantMessages: true,
+      thinkingFormat: 'deepseek',
+    },
+    'DeepSeek models should request Pi DeepSeek thinking/reasoning_content replay compatibility',
+  );
+  assert.equal(liveDeepSeek?.thinkingLevelMap?.xhigh, 'max', 'DeepSeek max thinking should be exposed as Pi xhigh');
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
-  assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview']);
+  assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview']);
   assert.equal(cache.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000, 'cache should preserve live context metadata');
   assert.equal(cache.models.find((model) => model.id === 'gpt-5.4[1m]')?.contextWindow, 1050000, 'cache should preserve the local 1m context override');
+  assert.equal(cache.models.find((model) => model.id === 'deepseek-v4-flash')?.contextWindow, 164000, 'cache should preserve DeepSeek context metadata');
   assert.equal(cache.models.find((model) => model.id === 'gemini-3-pro-preview')?.supportsReasoning, false, 'cache should preserve live reasoning metadata');
 
   globalThis.fetch = async () => ({ ok: false, async json() { return {}; } });
   const secondRegistrations = [];
   extension(createPi(secondRegistrations));
-  assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview']);
+  assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview']);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000);
+  assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'deepseek-v4-flash')?.api, 'openai-completions');
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gemini-3-pro-preview')?.reasoning, true);
 
   const staleCacheTime = Date.now() + 7 * 60 * 60 * 1000;
   assert.equal(readCachedModelIds(staleCacheTime), null, 'stale cache should be ignored by default');
   assert.deepEqual(
     readCachedModelIds(staleCacheTime, { allowStale: true }),
-    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview'],
+    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview'],
     'stale cache should be available as a startup fallback',
   );
   assert.equal(
@@ -192,10 +217,18 @@ try {
   assert.equal(legacyGemini.baseUrl, 'https://api.theclawbay.com/v1beta', 'legacy cached Gemini ids should still use the Gemini-compatible base URL');
 
   assert.deepEqual(
-    normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-2', 'gpt-image-1.5', 'gpt-5.4', 'gemini-3-pro-preview'], { includePinned: true }),
-    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'gemini-3-pro-preview'],
+    normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-2', 'gpt-image-1.5', 'gpt-5.4', 'deepseek-v4-flash', 'gemini-3-pro-preview'], { includePinned: true }),
+    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview'],
     'gpt-image-2 should be exposed while unsupported native image models stay hidden',
   );
+
+  const deepseekModel = buildOpenAIModels([{ id: 'deepseek-v4-flash', supportedReasoningEfforts: ['low', 'medium', 'high', 'max'] }])[0];
+  assert.equal(deepseekModel.name, 'DeepSeek V4 Flash');
+  assert.equal(deepseekModel.api, 'openai-completions');
+  assert.equal(deepseekModel.baseUrl, 'https://api.theclawbay.com/v1');
+  assert.equal(deepseekModel.compat?.thinkingFormat, 'deepseek');
+  assert.equal(deepseekModel.compat?.requiresReasoningContentOnAssistantMessages, true);
+  assert.equal(deepseekModel.thinkingLevelMap?.xhigh, 'max');
 
   const gptImage2 = buildOpenAIModels(['gpt-image-2'])[0];
   assert.equal(gptImage2.name, 'GPT Image 2');

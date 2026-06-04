@@ -6,6 +6,7 @@ A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi)
 
 - **GPT-5 & Codex Models** - Access via TheClawBay's native Codex Responses route with session-based prompt-cache hits
 - **Gemini Models** - Dynamically discovered `gemini-*` models use Pi's native Google transport against TheClawBay's `/v1beta` route, including Pi-compatible thinking support by default
+- **DeepSeek Models** - Dynamically discovered `deepseek-*` models use Pi's OpenAI-compatible chat-completions transport with DeepSeek thinking replay compatibility
 - **Single Provider** - Only `theclawbay` is registered; routing is selected per model
 - **GPT-5.4 Split Options** - `gpt-5.4` and `gpt-5.4[1m]` for clearer cost/context choice
 - **GPT Image 2** - Generate PNG images through TheClawBay's direct OpenAI-compatible Images API
@@ -66,6 +67,10 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
   - `https://api.theclawbay.com/backend-api/codex`
   - The custom `streamSimpleTheClawBayCodexResponses` transport is preserved for this path.
   - This is the cache-critical path: Pi's OpenAI Responses serializer emits `prompt_cache_key` from the session id, and the transport keeps `session_id` affinity headers so repeated requests can hit TheClawBay/Codex prompt cache.
+- **DeepSeek models** (`deepseek-*`) use TheClawBay's OpenAI-compatible chat-completions route:
+  - `https://api.theclawbay.com/v1`
+  - Pi's `openai-completions` transport is used because it supports DeepSeek thinking controls and replays assistant `reasoning_content` fields on follow-up turns.
+  - This avoids intermittent thinking-mode failures such as `400 "The \`reasoning_content\` in the thinking mode must be passed back to the API."`
 - **Gemini models** (`gemini-*`) are registered per model with:
   - `api: "google-generative-ai"`
   - `baseUrl: "https://api.theclawbay.com/v1beta"`
@@ -214,6 +219,7 @@ export default function (pi: ExtensionAPI) {
 | Model family | Base URL / Route | API Type |
 |--------------|------------------|----------|
 | `theclawbay/gpt-*`, `theclawbay/*codex*` | `https://api.theclawbay.com/backend-api/codex` | Custom Codex Responses transport (`theclawbay-codex-responses`) |
+| `theclawbay/deepseek-*` | `https://api.theclawbay.com/v1/chat/completions` | Pi `openai-completions` transport with DeepSeek compat |
 | `theclawbay/gemini-*` | `https://api.theclawbay.com/v1beta` | Pi `google-generative-ai` transport |
 | `theclawbay/gpt-image-2` | `https://api.theclawbay.com/v1/images/generations` | Direct OpenAI-compatible Images API |
 
@@ -283,6 +289,7 @@ PI_CLAWBAY_IMAGE_DIR=/tmp/pi-clawbay-images pi --no-extensions -e /path/to/pi-cl
 - `401` or `invalid_api_key`: verify the key in the TheClawBay dashboard and in your shell environment.
 - `429`, `weekly_cost_limit_reached`, or `5h_cost_limit_reached`: run `/quota` or `/clawbay-quota` and wait for the reset window.
 - Model missing from `/model`: run `/clawbay-refresh-models`; if discovery still omits it, TheClawBay may not expose it for your account.
+- DeepSeek intermittently returns `400 "The \`reasoning_content\` in the thinking mode must be passed back to the API."`: upgrade/reload this extension and refresh models. `deepseek-*` models must use Pi's `openai-completions` DeepSeek compatibility path, not the Codex Responses serializer.
 - Gemini model returns `404 upstream returned HTTP 404` on a Codex route: upgrade/reload this extension. `gemini-*` models must use Pi's `google-generative-ai` transport and TheClawBay `/v1beta`, not `backend-api/codex/responses`.
 - Gemini cache is not showing Codex-style cache hits: expected for now. TheClawBay currently blocks `v1beta/cachedContents`; Pi will still report `cachedContentTokenCount` as `cacheRead` if the upstream route returns it.
 - GPT/Codex cache behavior regresses: verify the request still uses `backend-api/codex`, includes `prompt_cache_key`, and sends `session_id` when Pi has a session id.
