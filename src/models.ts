@@ -232,7 +232,7 @@ function createOpenAIModel(source: ModelSource): ProviderModelConfig {
 	}
 
 	if (isDeepSeekModelId(id)) {
-		return createDeepSeekModelConfig(metadata, name, cost, options.thinkingLevelMap);
+		return createDeepSeekModelConfig(metadata, name, cost);
 	}
 
 	return createModelConfig(id, name, cost, resolveContextWindow(metadata, OPENAI_DEFAULT_CONTEXT_WINDOW), OPENAI_DEFAULT_MAX_TOKENS, options);

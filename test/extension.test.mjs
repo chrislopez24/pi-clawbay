@@ -90,9 +90,9 @@ try {
                 id: 'deepseek-v4-flash',
                 display_name: 'DeepSeek V4 Flash',
                 context_window: 164000,
-                supports_reasoning: true,
-                supported_reasoning_efforts: ['low', 'medium', 'high', 'max'],
-                default_reasoning_effort: 'high',
+                supports_reasoning: false,
+                supported_reasoning_efforts: [],
+                default_reasoning_effort: null,
               },
               {
                 id: 'gemini-3-pro-preview',
@@ -155,7 +155,7 @@ try {
   const liveDeepSeek = firstRegistrations[1].config.models.find((entry) => entry.id === 'deepseek-v4-flash');
   assert.equal(liveDeepSeek?.api, 'openai-completions', 'DeepSeek models should use Pi OpenAI chat completions compatibility');
   assert.equal(liveDeepSeek?.baseUrl, 'https://api.theclawbay.com/v1', 'DeepSeek models should use TheClawBay OpenAI-compatible base URL');
-  assert.equal(liveDeepSeek?.reasoning, true, 'DeepSeek reasoning metadata should be preserved');
+  assert.equal(liveDeepSeek?.reasoning, true, 'DeepSeek models should force reasoning support even when live metadata says otherwise');
   assert.deepEqual(
     liveDeepSeek?.compat,
     {
@@ -165,7 +165,11 @@ try {
     },
     'DeepSeek models should request Pi DeepSeek thinking/reasoning_content replay compatibility',
   );
-  assert.equal(liveDeepSeek?.thinkingLevelMap?.xhigh, 'max', 'DeepSeek max thinking should be exposed as Pi xhigh');
+  assert.deepEqual(
+    liveDeepSeek?.thinkingLevelMap,
+    { minimal: null, low: null, medium: null, high: 'high', xhigh: 'max' },
+    'DeepSeek models should expose only the upstream-recommended high/max thinking efforts',
+  );
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
   assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview']);
@@ -222,13 +226,14 @@ try {
     'gpt-image-2 should be exposed while unsupported native image models stay hidden',
   );
 
-  const deepseekModel = buildOpenAIModels([{ id: 'deepseek-v4-flash', supportedReasoningEfforts: ['low', 'medium', 'high', 'max'] }])[0];
+  const deepseekModel = buildOpenAIModels([{ id: 'deepseek-v4-flash', supportsReasoning: false, supportedReasoningEfforts: [] }])[0];
   assert.equal(deepseekModel.name, 'DeepSeek V4 Flash');
   assert.equal(deepseekModel.api, 'openai-completions');
   assert.equal(deepseekModel.baseUrl, 'https://api.theclawbay.com/v1');
+  assert.equal(deepseekModel.reasoning, true);
   assert.equal(deepseekModel.compat?.thinkingFormat, 'deepseek');
   assert.equal(deepseekModel.compat?.requiresReasoningContentOnAssistantMessages, true);
-  assert.equal(deepseekModel.thinkingLevelMap?.xhigh, 'max');
+  assert.deepEqual(deepseekModel.thinkingLevelMap, { minimal: null, low: null, medium: null, high: 'high', xhigh: 'max' });
 
   const gptImage2 = buildOpenAIModels(['gpt-image-2'])[0];
   assert.equal(gptImage2.name, 'GPT Image 2');

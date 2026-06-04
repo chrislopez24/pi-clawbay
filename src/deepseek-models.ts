@@ -11,6 +11,14 @@ const DEEPSEEK_COMPAT: ModelCompat = {
 	thinkingFormat: "deepseek",
 };
 
+const DEEPSEEK_THINKING_LEVEL_MAP: ThinkingLevelMap = {
+	minimal: null,
+	low: null,
+	medium: null,
+	high: "high",
+	xhigh: "max",
+};
+
 export function isDeepSeekModelId(id: string): boolean {
 	return /^deepseek[-.]/i.test(id);
 }
@@ -23,16 +31,15 @@ export function formatDeepSeekModelName(id: string, formatPart: (part: string) =
 export function createDeepSeekModelConfig(
 	metadata: TheClawBayModelMetadata,
 	name: string,
-	cost: ProviderModelConfig["cost"],
-	thinkingLevelMap?: ThinkingLevelMap
+	cost: ProviderModelConfig["cost"]
 ): ProviderModelConfig {
 	return {
 		id: metadata.id,
 		name,
 		api: "openai-completions",
 		baseUrl: THECLAWBAY_OPENAI_DISCOVERY_BASE_URL,
-		reasoning: metadata.supportsReasoning ?? true,
-		...(thinkingLevelMap ? { thinkingLevelMap: { ...thinkingLevelMap } } : {}),
+		reasoning: true,
+		thinkingLevelMap: { ...DEEPSEEK_THINKING_LEVEL_MAP },
 		input: ["text", "image"],
 		cost: { ...cost },
 		contextWindow: metadata.contextWindow ?? OPENAI_DEFAULT_CONTEXT_WINDOW,
