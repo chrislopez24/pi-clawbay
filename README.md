@@ -1,10 +1,11 @@
 # TheClawBay Provider for Pi Coding Agent
 
-A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi) that enables access to GPT-5, Codex, supported Gemini, and image-generation models through [TheClawBay](https://theclawbay.com) API.
+A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi) that enables access to GPT-5, Codex, Claude, supported Gemini, DeepSeek, and image-generation models through [TheClawBay](https://theclawbay.com) API.
 
 ## Features
 
 - **GPT-5 & Codex Models** - Access via TheClawBay's native Codex Responses route with session-based prompt-cache hits
+- **Claude Models** - Dynamically discovered `claude-*` models use Pi's native Anthropic Messages transport against TheClawBay's `/anthropic` route, including adaptive thinking support for current Opus/Sonnet models
 - **Gemini Models** - Dynamically discovered `gemini-*` models use Pi's native Google transport against TheClawBay's `/v1beta` route, including Pi-compatible thinking support by default
 - **DeepSeek Models** - Dynamically discovered `deepseek-*` models use Pi's OpenAI-compatible chat-completions transport with DeepSeek thinking replay compatibility
 - **Single Provider** - Only `theclawbay` is registered; routing is selected per model
@@ -56,6 +57,7 @@ Get your API key from [TheClawBay Dashboard](https://theclawbay.com).
 Model IDs are discovered dynamically at extension load from:
 
 - `GET https://api.theclawbay.com/v1/models`
+- `GET https://api.theclawbay.com/anthropic/v1/models`
 
 If discovery fails or `THECLAWBAY_API_KEY` is not set yet, the extension falls back to the last successful discovery cache, even if it is stale, then to a bundled default list so `/model` still works on startup. Live discovery refreshes the cache in the background after the provider has been registered.
 
@@ -71,6 +73,11 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
   - `https://api.theclawbay.com/v1`
   - Pi's `openai-completions` transport is used because it supports DeepSeek thinking controls and replays assistant `reasoning_content` fields on follow-up turns.
   - This avoids intermittent thinking-mode failures such as `400 "The \`reasoning_content\` in the thinking mode must be passed back to the API."`
+- **Claude models** (`claude-*`) are registered per model with:
+  - `api: "anthropic-messages"`
+  - `baseUrl: "https://api.theclawbay.com/anthropic"`
+  - Pi's native Anthropic transport is used for `/v1/messages`, tool use, prompt-cache markers, and Claude thinking replay.
+  - Current discovered Claude models include `claude-haiku-4-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, and `claude-sonnet-4-6`.
 - **Gemini models** (`gemini-*`) are registered per model with:
   - `api: "google-generative-ai"`
   - `baseUrl: "https://api.theclawbay.com/v1beta"`
@@ -116,6 +123,7 @@ The Codex cache behavior must not be degraded: GPT/Codex models should continue 
 Based on the live docs at `https://theclawbay.com/docs`:
 
 - OpenAI-compatible apps use `https://api.theclawbay.com/v1`
+- Claude-compatible apps use `https://api.theclawbay.com/anthropic`
 - Native Codex config uses `https://api.theclawbay.com/backend-api/codex`
 - Gemini-compatible apps use `https://api.theclawbay.com/v1beta`
 - The docs recommend calling `/models` first and selecting an available model dynamically
@@ -143,6 +151,7 @@ Why split it?
 - `gpt-5.4` is configured with a `272,000` token context window.
 - `gpt-5.4[1m]` is configured with a `1,050,000` token context window.
 - Current non-5.4 GPT-5/Codex variants default to `272,000` context and `128,000` max output tokens.
+- Current Claude 4.6+ Opus/Sonnet variants default to `1,000,000` context in Pi metadata; Opus uses `128,000` max output tokens and Sonnet/Haiku use `64,000`.
 - Gemini variants discovered from `/v1/models` use Pi's Google transport with `1,048,576` context and `65,536` max output tokens.
 - `gpt-image-2` uses the direct `/v1/images/generations` path with `1024x1024` PNG output, `272,000` context metadata, and `65,536` max output metadata.
 
@@ -155,13 +164,18 @@ Current fallback list in this package, used only when live discovery and cache a
 - `gpt-5.4[1m]`
 - `gpt-5.4-mini`
 - `gpt-image-2`
+- `claude-haiku-4-5`
+- `claude-opus-4-8`
+- `claude-opus-4-7`
+- `claude-opus-4-6`
+- `claude-sonnet-4-6`
 - `gpt-5.3-codex`
 - `gpt-5.2-codex`
 - `gpt-5.2`
 - `gpt-5.1-codex-max`
 - `gpt-5.1-codex-mini`
 
-Live discovery may add newer GPT/Codex and Gemini models such as `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-3.1-pro-preview`, or `gemini-3-flash-preview` when TheClawBay exposes them for your account.
+Live discovery may add newer GPT/Codex, Claude, Gemini, and DeepSeek models such as `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-3.1-pro-preview`, or `gemini-3-flash-preview` when TheClawBay exposes them for your account.
 
 `gpt-image-2` is exposed because TheClawBay's latest docs list it as the direct image-generation model for `POST /v1/images/generations`. Other native image-generation models returned by discovery, such as `gpt-image-1.5`, remain hidden until this extension has a dedicated, tested flow for them.
 
@@ -175,6 +189,8 @@ Use `/model` command in pi:
 /model theclawbay/gpt-5.5
 /model theclawbay/gpt-5.4
 /model theclawbay/gpt-5.4[1m]
+/model theclawbay/claude-opus-4-8
+/model theclawbay/claude-sonnet-4-6
 /model theclawbay/gemini-3-flash-preview
 /model theclawbay/gpt-image-2
 ```
@@ -207,6 +223,8 @@ export default function (pi: ExtensionAPI) {
   // - theclawbay/gpt-5.4[1m]
   // - theclawbay/gpt-5.4-mini
   // - theclawbay/gpt-image-2
+  // - theclawbay/claude-opus-4-8
+  // - theclawbay/claude-sonnet-4-6
   // - theclawbay/gpt-5.3-codex
   // - theclawbay/gemini-3-flash-preview (when live discovery exposes it)
 }
@@ -220,18 +238,19 @@ export default function (pi: ExtensionAPI) {
 |--------------|------------------|----------|
 | `theclawbay/gpt-*`, `theclawbay/*codex*` | `https://api.theclawbay.com/backend-api/codex` | Custom Codex Responses transport (`theclawbay-codex-responses`) |
 | `theclawbay/deepseek-*` | `https://api.theclawbay.com/v1/chat/completions` | Pi `openai-completions` transport with DeepSeek compat |
+| `theclawbay/claude-*` | `https://api.theclawbay.com/anthropic/v1/messages` | Pi `anthropic-messages` transport |
 | `theclawbay/gemini-*` | `https://api.theclawbay.com/v1beta` | Pi `google-generative-ai` transport |
 | `theclawbay/gpt-image-2` | `https://api.theclawbay.com/v1/images/generations` | Direct OpenAI-compatible Images API |
 
 ### Authentication
 
-All model families use the same `THECLAWBAY_API_KEY` value. GPT/Codex and direct image requests use Bearer token authentication:
+All model families use the same `THECLAWBAY_API_KEY` value. GPT/Codex, Claude discovery, and direct image requests use Bearer token authentication:
 
 ```text
 Authorization: Bearer THECLAWBAY_API_KEY
 ```
 
-Gemini requests are sent by Pi's Google transport, which passes the same key using the Google SDK's API-key header (`x-goog-api-key`).
+Gemini requests are sent by Pi's Google transport, which passes the same key using the Google SDK's API-key header (`x-goog-api-key`). Claude message requests are sent by Pi's Anthropic transport, which passes the same key as the Anthropic SDK API-key header accepted by TheClawBay.
 
 ### Quota Checking
 
@@ -273,6 +292,9 @@ PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/
 # Gemini native /v1beta path (choose a gemini-* id shown by --list-models)
 PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gemini-3-flash-preview --thinking off --no-session -p "Say OK and nothing else."
 
+# Claude native /anthropic path (choose a claude-* id shown by --list-models)
+PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/claude-opus-4-8 --thinking low --no-session -p "Say OK and nothing else."
+
 # Codex prompt-cache path: keep the same session so Pi emits prompt_cache_key/session_id
 PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gpt-5.4-mini -p "Summarize package.json in one sentence."
 
@@ -290,6 +312,7 @@ PI_CLAWBAY_IMAGE_DIR=/tmp/pi-clawbay-images pi --no-extensions -e /path/to/pi-cl
 - `429`, `weekly_cost_limit_reached`, or `5h_cost_limit_reached`: run `/quota` or `/clawbay-quota` and wait for the reset window.
 - Model missing from `/model`: run `/clawbay-refresh-models`; if discovery still omits it, TheClawBay may not expose it for your account.
 - DeepSeek intermittently returns `400 "The \`reasoning_content\` in the thinking mode must be passed back to the API."`: upgrade/reload this extension and refresh models. `deepseek-*` models must use Pi's `openai-completions` DeepSeek compatibility path, not the Codex Responses serializer.
+- Claude model returns an OpenAI/Codex-route error: upgrade/reload this extension and refresh models. `claude-*` models must use Pi's `anthropic-messages` transport and TheClawBay `/anthropic`, not `backend-api/codex/responses`.
 - Gemini model returns `404 upstream returned HTTP 404` on a Codex route: upgrade/reload this extension. `gemini-*` models must use Pi's `google-generative-ai` transport and TheClawBay `/v1beta`, not `backend-api/codex/responses`.
 - Gemini cache is not showing Codex-style cache hits: expected for now. TheClawBay currently blocks `v1beta/cachedContents`; Pi will still report `cachedContentTokenCount` as `cacheRead` if the upstream route returns it.
 - GPT/Codex cache behavior regresses: verify the request still uses `backend-api/codex`, includes `prompt_cache_key`, and sends `session_id` when Pi has a session id.

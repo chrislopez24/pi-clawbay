@@ -1,16 +1,19 @@
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 
 export const THECLAWBAY_OPENAI_DISCOVERY_BASE_URL = "https://api.theclawbay.com/v1";
+export const THECLAWBAY_CLAUDE_BASE_URL = "https://api.theclawbay.com/anthropic";
 export const THECLAWBAY_GEMINI_BASE_URL = "https://api.theclawbay.com/v1beta";
 export const THECLAWBAY_CODEX_BASE_URL = "https://api.theclawbay.com/backend-api/codex";
 export const THECLAWBAY_CODEX_RESPONSES_URL = `${THECLAWBAY_CODEX_BASE_URL}/responses`;
 export const THECLAWBAY_QUOTA_URL = "https://theclawbay.com/api/codex-auth/v1/quota";
 export const THECLAWBAY_OPENAI_MODELS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/models`;
+export const THECLAWBAY_CLAUDE_MODELS_URL = `${THECLAWBAY_CLAUDE_BASE_URL}/v1/models`;
 export const THECLAWBAY_IMAGES_GENERATIONS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/images/generations`;
 export const THECLAWBAY_CODEX_API = "theclawbay-codex-responses";
 export const THECLAWBAY_CHATGPT_ACCOUNT_ID = "theclawbay";
+export const THECLAWBAY_ANTHROPIC_VERSION_HEADER = "2023-06-01";
 
-export const MODEL_CACHE_VERSION = 2;
+export const MODEL_CACHE_VERSION = 3;
 export const MODEL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 export const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 
@@ -42,6 +45,11 @@ export const OPENAI_DEFAULT_MAX_TOKENS = 128000;
 export const OPENAI_IMAGE_MAX_TOKENS = 65536;
 export const GOOGLE_GEMINI_CONTEXT_WINDOW = 1048576;
 export const GOOGLE_GEMINI_MAX_TOKENS = 65536;
+export const CLAUDE_CONTEXT_WINDOW = 1000000;
+export const CLAUDE_DEFAULT_MAX_TOKENS = 64000;
+export const CLAUDE_HAIKU_MAX_TOKENS = 64000;
+export const CLAUDE_SONNET_MAX_TOKENS = 64000;
+export const CLAUDE_OPUS_MAX_TOKENS = 128000;
 
 export const HIDDEN_MODEL_ID_PREFIXES = ["gpt-image-"] as const;
 export const PINNED_MODEL_IDS: string[] = [];
@@ -51,6 +59,11 @@ export const FALLBACK_OPENAI_MODEL_IDS = [
 	GPT_54_1M_MODEL_ID,
 	"gpt-5.4-mini",
 	GPT_IMAGE_2_MODEL_ID,
+	"claude-haiku-4-5",
+	"claude-opus-4-8",
+	"claude-opus-4-7",
+	"claude-opus-4-6",
+	"claude-sonnet-4-6",
 	"gpt-5.3-codex",
 	"gpt-5.2-codex",
 	"gpt-5.2",

@@ -63,7 +63,21 @@ function textDeltas(events) {
 try {
   process.env.THECLAWBAY_API_KEY = 'test-key';
   globalThis.fetch = async (url) => {
-    if (String(url).endsWith('/models')) {
+    if (String(url).endsWith('/anthropic/v1/models')) {
+      return {
+        ok: true,
+        async json() {
+          return {
+            data: [
+              { id: 'claude-haiku-4-5', display_name: 'Claude Haiku 4 5' },
+              { id: 'claude-opus-4-8', display_name: 'Claude Opus 4 8' },
+              { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4 6' },
+            ],
+          };
+        },
+      };
+    }
+    if (String(url).endsWith('/v1/models')) {
       return {
         ok: true,
         async json() {
@@ -101,6 +115,13 @@ try {
                 supported_reasoning_efforts: [],
                 default_reasoning_effort: null,
               },
+              {
+                id: 'claude-opus-4-8',
+                display_name: 'claude-opus-4-8',
+                supports_reasoning: false,
+                supported_reasoning_efforts: [],
+                default_reasoning_effort: null,
+              },
             ],
           };
         },
@@ -115,6 +136,7 @@ try {
   assert.equal(firstRegistrations.length, 1, 'provider should register immediately before live discovery resolves');
   const fallbackGpt55 = firstRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5');
   assert.ok(fallbackGpt55, 'fallback models should include gpt-5.5');
+  assert.ok(firstRegistrations[0].config.models.some((model) => model.id === 'claude-opus-4-8'), 'fallback models should include supported Claude models');
   assert.equal(fallbackGpt55.contextWindow, 272000, 'gpt-5.5 should use the default 272k Codex context window');
   assert.equal(fallbackGpt55.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should explicitly expose xhigh thinking');
   assert.equal(fallbackGpt55.thinkingLevelMap?.minimal, 'low', 'gpt-5.5 should map minimal thinking to low like Pi 0.73 Codex');
@@ -130,6 +152,9 @@ try {
     'gpt-5.4[1m]',
     'deepseek-v4-flash',
     'gemini-3-pro-preview',
+    'claude-haiku-4-5',
+    'claude-opus-4-8',
+    'claude-sonnet-4-6',
   ]);
   const liveGpt55 = firstRegistrations[1].config.models.find((entry) => entry.id === 'gpt-5.5');
   assert.equal(liveGpt55?.contextWindow, 384000, 'live context_window should override the default Codex context window');
@@ -171,8 +196,17 @@ try {
     'DeepSeek models should expose only the upstream-recommended high/max thinking efforts',
   );
 
+  const liveClaude = firstRegistrations[1].config.models.find((entry) => entry.id === 'claude-opus-4-8');
+  assert.equal(liveClaude?.api, 'anthropic-messages', 'Claude models should use Pi\'s native Anthropic Messages transport');
+  assert.equal(liveClaude?.baseUrl, 'https://api.theclawbay.com/anthropic', 'Claude models should use TheClawBay\'s Anthropic-compatible base URL');
+  assert.equal(liveClaude?.reasoning, true, 'Claude models should expose Pi Anthropic extended/adaptive thinking');
+  assert.deepEqual(liveClaude?.compat, { forceAdaptiveThinking: true, supportsTemperature: false }, 'new Opus models should use Pi adaptive thinking compatibility');
+  assert.deepEqual(liveClaude?.thinkingLevelMap, { xhigh: 'xhigh' }, 'Opus 4.8 should expose native xhigh effort');
+  assert.equal(liveClaude?.contextWindow, 1000000, 'new Claude 4.6+ models should use 1M context in Pi metadata');
+  assert.equal(liveClaude?.maxTokens, 128000, 'new Opus models should expose the current Pi Opus output limit');
+
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
-  assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview']);
+  assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6']);
   assert.equal(cache.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000, 'cache should preserve live context metadata');
   assert.equal(cache.models.find((model) => model.id === 'gpt-5.4[1m]')?.contextWindow, 1050000, 'cache should preserve the local 1m context override');
   assert.equal(cache.models.find((model) => model.id === 'deepseek-v4-flash')?.contextWindow, 164000, 'cache should preserve DeepSeek context metadata');
@@ -181,7 +215,7 @@ try {
   globalThis.fetch = async () => ({ ok: false, async json() { return {}; } });
   const secondRegistrations = [];
   extension(createPi(secondRegistrations));
-  assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview']);
+  assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6']);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'deepseek-v4-flash')?.api, 'openai-completions');
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gemini-3-pro-preview')?.reasoning, true);
@@ -190,7 +224,7 @@ try {
   assert.equal(readCachedModelIds(staleCacheTime), null, 'stale cache should be ignored by default');
   assert.deepEqual(
     readCachedModelIds(staleCacheTime, { allowStale: true }),
-    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview'],
+    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6'],
     'stale cache should be available as a startup fallback',
   );
   assert.equal(
@@ -221,8 +255,8 @@ try {
   assert.equal(legacyGemini.baseUrl, 'https://api.theclawbay.com/v1beta', 'legacy cached Gemini ids should still use the Gemini-compatible base URL');
 
   assert.deepEqual(
-    normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-2', 'gpt-image-1.5', 'gpt-5.4', 'deepseek-v4-flash', 'gemini-3-pro-preview'], { includePinned: true }),
-    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview'],
+    normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-2', 'gpt-image-1.5', 'gpt-5.4', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-opus-4-8'], { includePinned: true }),
+    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-opus-4-8'],
     'gpt-image-2 should be exposed while unsupported native image models stay hidden',
   );
 
@@ -241,7 +275,17 @@ try {
   assert.equal(gptImage2.contextWindow, 272000);
   assert.equal(gptImage2.maxTokens, 65536);
 
-  globalThis.fetch = async () => ({ ok: true, async json() { return { data: [{ id: 'gpt-5.5' }] }; } });
+  const opus48 = buildOpenAIModels(['claude-opus-4-8'])[0];
+  assert.equal(opus48.name, 'Claude Opus 4.8');
+  assert.equal(opus48.api, 'anthropic-messages');
+  assert.equal(opus48.baseUrl, 'https://api.theclawbay.com/anthropic');
+  assert.deepEqual(opus48.compat, { forceAdaptiveThinking: true, supportsTemperature: false });
+  assert.deepEqual(opus48.thinkingLevelMap, { xhigh: 'xhigh' });
+
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/anthropic/v1/models')) return { ok: true, async json() { return { data: [] }; } };
+    return { ok: true, async json() { return { data: [{ id: 'gpt-5.5' }] }; } };
+  };
   const staleRegistrations = [];
   const stalePi = createStalePi(staleRegistrations);
   extension(stalePi);
@@ -251,7 +295,10 @@ try {
   await waitForRefresh();
   assert.equal(staleRegistrations.length, 1, 'stale extension refresh should not crash after initial registration');
 
-  globalThis.fetch = async () => ({ ok: true, async json() { return { data: [{ id: 'gpt-5.4-mini', context_window: 512000 }] }; } });
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/anthropic/v1/models')) return { ok: true, async json() { return { data: [] }; } };
+    return { ok: true, async json() { return { data: [{ id: 'gpt-5.4-mini', context_window: 512000 }] }; } };
+  };
   const refreshCommands = {};
   const refreshRegistrations = [];
   extension(createPi(refreshRegistrations, refreshCommands));

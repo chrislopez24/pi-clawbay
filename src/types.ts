@@ -18,6 +18,13 @@ export interface OpenAIModelListResponse {
 	}>;
 }
 
+export interface ClaudeModelListResponse {
+	data?: Array<{
+		id?: string;
+		display_name?: string;
+	}>;
+}
+
 export interface ModelCacheFile {
 	version?: number;
 	fetchedAt?: string;

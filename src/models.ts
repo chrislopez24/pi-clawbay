@@ -17,11 +17,13 @@ import {
 	PINNED_MODEL_IDS,
 	ZERO_COST,
 } from "./constants.js";
+import { createClaudeModelConfig, formatClaudeModelName, isClaudeModelId } from "./claude-models.js";
 import { createDeepSeekModelConfig, formatDeepSeekModelName, isDeepSeekModelId } from "./deepseek-models.js";
 import { createGoogleModelConfig, isGoogleModelId, resolveGoogleThinkingLevelMap, supportsGoogleThinking } from "./google-models.js";
 import type { TheClawBayModelMetadata } from "./types.js";
 
 export { isGoogleModelId } from "./google-models.js";
+export { isClaudeModelId } from "./claude-models.js";
 
 type ModelSource = string | TheClawBayModelMetadata;
 type ThinkingLevelMap = NonNullable<ProviderModelConfig["thinkingLevelMap"]>;
@@ -99,6 +101,10 @@ function formatGenericModelName(id: string): string {
 
 	if (isDeepSeekModelId(id)) {
 		return formatDeepSeekModelName(id, formatModelNamePart);
+	}
+
+	if (isClaudeModelId(id)) {
+		return formatClaudeModelName(id, formatModelNamePart);
 	}
 
 	return id.split("-").map(formatModelNamePart).join(" ");
@@ -235,6 +241,10 @@ function createOpenAIModel(source: ModelSource): ProviderModelConfig {
 		return createDeepSeekModelConfig(metadata, name, cost);
 	}
 
+	if (isClaudeModelId(id)) {
+		return createClaudeModelConfig(metadata, formatClaudeModelName(id, formatModelNamePart));
+	}
+
 	return createModelConfig(id, name, cost, resolveContextWindow(metadata, OPENAI_DEFAULT_CONTEXT_WINDOW), OPENAI_DEFAULT_MAX_TOKENS, options);
 }
 
@@ -265,7 +275,7 @@ export function normalizeOpenAIModelMetadata(
 }
 
 function normalizeOpenAIModelId(id: string): string[] {
-	if (id.startsWith("claude-") || id === "gpt-5.4-pro" || isHiddenImageGenerationModel(id)) {
+	if (id === "gpt-5.4-pro" || isHiddenImageGenerationModel(id)) {
 		return [];
 	}
 

@@ -2,10 +2,17 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { MODEL_CACHE_TTL_MS, MODEL_CACHE_VERSION, MODEL_DISCOVERY_TIMEOUT_MS, THECLAWBAY_OPENAI_MODELS_URL } from "./constants.js";
-import { buildFallbackOpenAIModels, buildOpenAIModels, normalizeOpenAIModelIds, normalizeOpenAIModelMetadata } from "./models.js";
+import {
+	MODEL_CACHE_TTL_MS,
+	MODEL_CACHE_VERSION,
+	MODEL_DISCOVERY_TIMEOUT_MS,
+	THECLAWBAY_ANTHROPIC_VERSION_HEADER,
+	THECLAWBAY_CLAUDE_MODELS_URL,
+	THECLAWBAY_OPENAI_MODELS_URL,
+} from "./constants.js";
+import { buildFallbackOpenAIModels, buildOpenAIModels, isClaudeModelId, normalizeOpenAIModelIds, normalizeOpenAIModelMetadata } from "./models.js";
 import { registerProviders } from "./provider.js";
-import type { ModelCacheFile, OpenAIModelListResponse, TheClawBayModelMetadata } from "./types.js";
+import type { ClaudeModelListResponse, ModelCacheFile, OpenAIModelListResponse, TheClawBayModelMetadata } from "./types.js";
 
 export function getModelCachePath(): string {
 	const overrideDir = process.env.PI_CLAWBAY_CACHE_DIR?.trim();
@@ -63,7 +70,7 @@ function readValidCacheFile(cachePath: string, now: number, options?: { allowSta
 }
 
 function isSupportedCacheVersion(version: unknown): boolean {
-	return version === MODEL_CACHE_VERSION || version === 1;
+	return version === MODEL_CACHE_VERSION || version === 2 || version === 1;
 }
 
 function extractCachedModelMetadata(parsed: ModelCacheFile): TheClawBayModelMetadata[] {
@@ -133,6 +140,12 @@ export async function fetchOpenAIModelIds(apiKey: string): Promise<string[] | nu
 }
 
 export async function fetchOpenAIModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
+	const [openaiMetadata, claudeMetadata] = await Promise.all([fetchOpenAICompatibleModelMetadata(apiKey), fetchClaudeModelMetadata(apiKey)]);
+	const merged = normalizeOpenAIModelMetadata([...(openaiMetadata ?? []), ...(claudeMetadata ?? [])], { includePinned: true });
+	return merged.length > 0 ? merged : null;
+}
+
+async function fetchOpenAICompatibleModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
 	try {
 		const response = await fetch(THECLAWBAY_OPENAI_MODELS_URL, {
 			headers: {
@@ -147,10 +160,34 @@ export async function fetchOpenAIModelMetadata(apiKey: string): Promise<TheClawB
 		}
 
 		const payload = (await response.json()) as OpenAIModelListResponse;
-		const models = normalizeOpenAIModelMetadata(extractModelMetadata(payload), { includePinned: true });
+		const models = normalizeOpenAIModelMetadata(extractModelMetadata(payload).filter((model) => !isClaudeModelId(model.id)), { includePinned: true });
 		return models.length > 0 ? models : null;
 	} catch (error) {
 		debugLog(`Model discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+		return null;
+	}
+}
+
+async function fetchClaudeModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
+	try {
+		const response = await fetch(THECLAWBAY_CLAUDE_MODELS_URL, {
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				"anthropic-version": THECLAWBAY_ANTHROPIC_VERSION_HEADER,
+			},
+			signal: AbortSignal.timeout(MODEL_DISCOVERY_TIMEOUT_MS),
+		});
+
+		if (!response.ok) {
+			debugLog(`Claude model discovery failed with HTTP ${response.status}`);
+			return null;
+		}
+
+		const payload = (await response.json()) as ClaudeModelListResponse;
+		const models = normalizeOpenAIModelMetadata(extractClaudeModelMetadata(payload), { includePinned: false });
+		return models.length > 0 ? models : null;
+	} catch (error) {
+		debugLog(`Claude model discovery failed: ${error instanceof Error ? error.message : String(error)}`);
 		return null;
 	}
 }
@@ -174,6 +211,22 @@ function extractModelMetadata(payload: OpenAIModelListResponse): TheClawBayModel
 				...(entry.default_reasoning_effort === null || typeof entry.default_reasoning_effort === "string"
 					? { defaultReasoningEffort: entry.default_reasoning_effort }
 					: {}),
+			};
+		})
+		.filter((model): model is TheClawBayModelMetadata => model !== null);
+}
+
+function extractClaudeModelMetadata(payload: ClaudeModelListResponse): TheClawBayModelMetadata[] {
+	return (payload.data ?? [])
+		.map((entry) => {
+			const id = entry.id?.trim();
+			if (!id) {
+				return null;
+			}
+
+			return {
+				id,
+				...(typeof entry.display_name === "string" && entry.display_name.trim().length > 0 ? { name: entry.display_name.trim() } : {}),
 			};
 		})
 		.filter((model): model is TheClawBayModelMetadata => model !== null);
@@ -205,7 +258,7 @@ export function refreshProviderModels(pi: ExtensionAPI, apiKey: string): void {
 			if (count === null) {
 				return;
 			}
-			console.info(`[theclawbay] Registered ${count} OpenAI-compatible models from live model discovery.`);
+			console.info(`[theclawbay] Registered ${count} models from live model discovery.`);
 		})
 		.catch((error) => {
 			console.warn(`[theclawbay] Skipped live model refresh: ${error instanceof Error ? error.message : String(error)}`);
