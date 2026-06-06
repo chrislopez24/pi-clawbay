@@ -21,6 +21,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerModelRefreshCommand, resolveStartupProviderModels } from "./model-cache.js";
+import { registerOverflowNormalization } from "./overflow.js";
 import { registerProviders } from "./provider.js";
 import { getApiKey, registerQuotaCommand } from "./quota.js";
 
@@ -49,6 +50,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	const { models, source } = await resolveStartupProviderModels(apiKey);
 	debugLog(`Registering ${models.length} model(s) from ${source}.`);
 	registerProviders(pi, models);
+	registerOverflowNormalization(pi);
 
 	registerQuotaCommand(pi);
 	registerModelRefreshCommand(pi, getApiKey);

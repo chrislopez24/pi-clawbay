@@ -17,7 +17,7 @@ export function buildTheClawBayHeaders(options?: SimpleStreamOptions): Record<st
 		"chatgpt-account-id": THECLAWBAY_CHATGPT_ACCOUNT_ID,
 		originator: "pi",
 		"OpenAI-Beta": "responses=experimental",
-		...(options?.sessionId ? { session_id: options.sessionId } : {}),
+		...(options?.sessionId ? { "session-id": options.sessionId, session_id: options.sessionId } : {}),
 	};
 }
 

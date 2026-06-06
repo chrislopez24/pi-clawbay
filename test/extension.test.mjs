@@ -16,6 +16,7 @@ import {
   restoreTheClawBayEventProvider,
   streamSimpleTheClawBayCodexResponses,
 } from '../dist/transport.js';
+import { normalizeTheClawBayContextOverflow } from '../dist/overflow.js';
 
 const cacheDir = mkdtempSync(join(tmpdir(), 'pi-clawbay-test-'));
 const imageDir = mkdtempSync(join(tmpdir(), 'pi-clawbay-images-'));
@@ -31,13 +32,16 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function createPi(registrations, commands = {}) {
+function createPi(registrations, commands = {}, handlers = {}) {
   return {
     registerProvider(name, config) {
       registrations.push({ name, config });
     },
     registerCommand(name, config) {
       commands[name] = config;
+    },
+    on(name, handler) {
+      handlers[name] = handler;
     },
   };
 }
@@ -48,6 +52,7 @@ function createStalePi(registrations) {
       registrations.push({ name, config });
     },
     registerCommand() {},
+    on() {},
   };
 }
 
@@ -126,9 +131,11 @@ try {
   };
 
   const firstRegistrations = [];
-  const firstResult = await extension(createPi(firstRegistrations));
+  const firstHandlers = {};
+  const firstResult = await extension(createPi(firstRegistrations, {}, firstHandlers));
   assert.equal(firstResult, undefined, 'extension factory should resolve after startup discovery');
   assert.equal(firstRegistrations.length, 1, 'provider should register once after startup discovery resolves');
+  assert.equal(typeof firstHandlers.message_end, 'function', 'context overflow normalization should be registered');
   assert.deepEqual(firstRegistrations[0].config.models.map((model) => model.id), [
     'gpt-5.5',
     'gpt-image-2',
@@ -364,8 +371,56 @@ try {
     'chatgpt-account-id': 'theclawbay',
     originator: 'pi',
     'OpenAI-Beta': 'responses=experimental',
+    'session-id': 'session-123',
     session_id: 'session-123',
   });
+
+  const overflowResult = normalizeTheClawBayContextOverflow(
+    {
+      message: {
+        role: 'assistant',
+        provider: 'theclawbay',
+        stopReason: 'error',
+        errorMessage: 'input exceeds maximum context window',
+      },
+    },
+    {},
+  );
+  assert.equal(
+    overflowResult?.message.errorMessage,
+    'context_length_exceeded: input exceeds maximum context window',
+    'TheClawBay context overflow errors should be normalized for Pi auto-compaction',
+  );
+  assert.equal(
+    normalizeTheClawBayContextOverflow(
+      {
+        message: {
+          role: 'assistant',
+          provider: 'theclawbay',
+          stopReason: 'error',
+          errorMessage: 'rate limit reached',
+        },
+      },
+      {},
+    ),
+    undefined,
+    'rate-limit errors must not be normalized as context overflow',
+  );
+  assert.equal(
+    normalizeTheClawBayContextOverflow(
+      {
+        message: {
+          role: 'assistant',
+          provider: 'other-provider',
+          stopReason: 'error',
+          errorMessage: 'input exceeds maximum context window',
+        },
+      },
+      {},
+    ),
+    undefined,
+    'overflow normalization must be scoped to TheClawBay',
+  );
 
   const payload = buildTheClawBayPayload(
     {
