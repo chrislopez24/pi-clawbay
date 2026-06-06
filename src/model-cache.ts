@@ -252,19 +252,6 @@ export async function refreshProviderModelsNow(pi: ExtensionAPI, apiKey: string)
 	return models.length;
 }
 
-export function refreshProviderModels(pi: ExtensionAPI, apiKey: string): void {
-	void refreshProviderModelsNow(pi, apiKey)
-		.then((count) => {
-			if (count === null) {
-				return;
-			}
-			console.info(`[theclawbay] Registered ${count} models from live model discovery.`);
-		})
-		.catch((error) => {
-			console.warn(`[theclawbay] Skipped live model refresh: ${error instanceof Error ? error.message : String(error)}`);
-		});
-}
-
 export function registerModelRefreshCommand(pi: ExtensionAPI, getApiKey: () => string | undefined): void {
 	pi.registerCommand("clawbay-refresh-models", {
 		description: "Refresh TheClawBay models from live discovery",
@@ -294,7 +281,15 @@ export function registerModelRefreshCommand(pi: ExtensionAPI, getApiKey: () => s
 	});
 }
 
-export function loadProviderModels(): { models: ProviderModelConfig[]; source: "fallback" | "cache" } {
+export async function resolveStartupProviderModels(apiKey?: string): Promise<{ models: ProviderModelConfig[]; source: "live" | "fallback" | "cache" }> {
+	if (apiKey) {
+		const liveMetadata = await fetchOpenAIModelMetadata(apiKey);
+		if (liveMetadata) {
+			writeCachedModelMetadata(liveMetadata);
+			return { models: buildOpenAIModels(liveMetadata), source: "live" };
+		}
+	}
+
 	const cachedModels = readCachedModelMetadata(Date.now(), { allowStale: true });
 	if (cachedModels) {
 		return { models: buildOpenAIModels(cachedModels), source: "cache" };

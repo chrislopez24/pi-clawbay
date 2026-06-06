@@ -20,7 +20,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadProviderModels, refreshProviderModels, registerModelRefreshCommand } from "./model-cache.js";
+import { registerModelRefreshCommand, resolveStartupProviderModels } from "./model-cache.js";
 import { registerProviders } from "./provider.js";
 import { getApiKey, registerQuotaCommand } from "./quota.js";
 
@@ -39,20 +39,16 @@ function warnMissingApiKey(): void {
 	);
 }
 
-export default function (pi: ExtensionAPI): void {
+export default async function (pi: ExtensionAPI): Promise<void> {
 	const apiKey = getApiKey();
 
 	if (!apiKey) {
 		warnMissingApiKey();
 	}
 
-	const { models, source } = loadProviderModels();
+	const { models, source } = await resolveStartupProviderModels(apiKey);
 	debugLog(`Registering ${models.length} model(s) from ${source}.`);
 	registerProviders(pi, models);
-
-	if (apiKey) {
-		refreshProviderModels(pi, apiKey);
-	}
 
 	registerQuotaCommand(pi);
 	registerModelRefreshCommand(pi, getApiKey);

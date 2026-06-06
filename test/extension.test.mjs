@@ -42,11 +42,6 @@ function createPi(registrations, commands = {}) {
   };
 }
 
-async function waitForRefresh() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 function createStalePi(registrations) {
   return {
     registerProvider(name, config) {
@@ -131,21 +126,10 @@ try {
   };
 
   const firstRegistrations = [];
-  const firstResult = extension(createPi(firstRegistrations));
-  assert.equal(firstResult, undefined, 'extension factory should register synchronously');
-  assert.equal(firstRegistrations.length, 1, 'provider should register immediately before live discovery resolves');
-  const fallbackGpt55 = firstRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5');
-  assert.ok(fallbackGpt55, 'fallback models should include gpt-5.5');
-  assert.ok(firstRegistrations[0].config.models.some((model) => model.id === 'claude-opus-4-8'), 'fallback models should include supported Claude models');
-  assert.equal(fallbackGpt55.contextWindow, 272000, 'gpt-5.5 should use the default 272k Codex context window');
-  assert.equal(fallbackGpt55.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should explicitly expose xhigh thinking');
-  assert.equal(fallbackGpt55.thinkingLevelMap?.minimal, 'low', 'gpt-5.5 should map minimal thinking to low like Pi 0.73 Codex');
-  assert.ok(firstRegistrations[0].config.models.some((model) => model.id === 'gpt-image-2'), 'fallback models should include supported gpt-image-2');
-  assert.equal(firstRegistrations[0].config.models.some((model) => model.id === 'gpt-image-1.5'), false, 'unsupported native image models should stay hidden from fallback model selection');
-
-  await waitForRefresh();
-  assert.equal(firstRegistrations.length, 2, 'live refresh should re-register after discovery');
-  assert.deepEqual(firstRegistrations[1].config.models.map((model) => model.id), [
+  const firstResult = await extension(createPi(firstRegistrations));
+  assert.equal(firstResult, undefined, 'extension factory should resolve after startup discovery');
+  assert.equal(firstRegistrations.length, 1, 'provider should register once after startup discovery resolves');
+  assert.deepEqual(firstRegistrations[0].config.models.map((model) => model.id), [
     'gpt-5.5',
     'gpt-image-2',
     'gpt-5.4',
@@ -156,17 +140,17 @@ try {
     'claude-opus-4-8',
     'claude-sonnet-4-6',
   ]);
-  const liveGpt55 = firstRegistrations[1].config.models.find((entry) => entry.id === 'gpt-5.5');
+  const liveGpt55 = firstRegistrations[0].config.models.find((entry) => entry.id === 'gpt-5.5');
   assert.equal(liveGpt55?.contextWindow, 384000, 'live context_window should override the default Codex context window');
   assert.equal(liveGpt55?.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should expose xhigh from live metadata');
   assert.equal(liveGpt55?.thinkingLevelMap?.minimal, 'low', 'gpt-5.5 should map minimal to low when only low is supported upstream');
   for (const id of ['gpt-5.4', 'gpt-5.4[1m]']) {
-    const model = firstRegistrations[1].config.models.find((entry) => entry.id === id);
+    const model = firstRegistrations[0].config.models.find((entry) => entry.id === id);
     assert.equal(model?.contextWindow, id === 'gpt-5.4[1m]' ? 1050000 : 272000, `${id} should use its expected context window`);
     assert.equal(model?.thinkingLevelMap?.xhigh, null, `${id} should not expose unsupported xhigh thinking`);
     assert.equal(model?.thinkingLevelMap?.minimal, 'minimal', `${id} should preserve upstream minimal thinking`);
   }
-  const liveGemini = firstRegistrations[1].config.models.find((entry) => entry.id === 'gemini-3-pro-preview');
+  const liveGemini = firstRegistrations[0].config.models.find((entry) => entry.id === 'gemini-3-pro-preview');
   assert.equal(liveGemini?.api, 'google-generative-ai', 'Gemini models should use Pi\'s native Google transport');
   assert.equal(liveGemini?.baseUrl, 'https://api.theclawbay.com/v1beta', 'Gemini models should use TheClawBay\'s Gemini-compatible base URL');
   assert.equal(liveGemini?.reasoning, true, 'Gemini models should enable Pi native Google thinking when Pi marks the model as compatible');
@@ -177,7 +161,7 @@ try {
   );
   assert.equal(liveGemini?.contextWindow, 1048576, 'Gemini models should use the native Gemini context window');
   assert.equal(liveGemini?.maxTokens, 65536, 'Gemini models should use the native Gemini output limit');
-  const liveDeepSeek = firstRegistrations[1].config.models.find((entry) => entry.id === 'deepseek-v4-flash');
+  const liveDeepSeek = firstRegistrations[0].config.models.find((entry) => entry.id === 'deepseek-v4-flash');
   assert.equal(liveDeepSeek?.api, 'openai-completions', 'DeepSeek models should use Pi OpenAI chat completions compatibility');
   assert.equal(liveDeepSeek?.baseUrl, 'https://api.theclawbay.com/v1', 'DeepSeek models should use TheClawBay OpenAI-compatible base URL');
   assert.equal(liveDeepSeek?.reasoning, true, 'DeepSeek models should force reasoning support even when live metadata says otherwise');
@@ -196,7 +180,7 @@ try {
     'DeepSeek models should expose only the upstream-recommended high/max thinking efforts',
   );
 
-  const liveClaude = firstRegistrations[1].config.models.find((entry) => entry.id === 'claude-opus-4-8');
+  const liveClaude = firstRegistrations[0].config.models.find((entry) => entry.id === 'claude-opus-4-8');
   assert.equal(liveClaude?.api, 'anthropic-messages', 'Claude models should use Pi\'s native Anthropic Messages transport');
   assert.equal(liveClaude?.baseUrl, 'https://api.theclawbay.com/anthropic', 'Claude models should use TheClawBay\'s Anthropic-compatible base URL');
   assert.equal(liveClaude?.reasoning, true, 'Claude models should expose Pi Anthropic extended/adaptive thinking');
@@ -214,11 +198,33 @@ try {
 
   globalThis.fetch = async () => ({ ok: false, async json() { return {}; } });
   const secondRegistrations = [];
-  extension(createPi(secondRegistrations));
+  await extension(createPi(secondRegistrations));
   assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6']);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'deepseek-v4-flash')?.api, 'openai-completions');
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gemini-3-pro-preview')?.reasoning, true);
+
+  delete process.env.THECLAWBAY_API_KEY;
+  globalThis.fetch = async () => {
+    throw new Error('startup discovery should not fetch without an API key');
+  };
+  const cachedNoKeyRegistrations = [];
+  await extension(createPi(cachedNoKeyRegistrations));
+  assert.deepEqual(
+    cachedNoKeyRegistrations[0].config.models.map((model) => model.id),
+    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6'],
+    'startup without an API key should fall back to the stale cache',
+  );
+  const liveCacheSnapshot = readFileSync(join(cacheDir, 'models.json'), 'utf8');
+  rmSync(join(cacheDir, 'models.json'));
+  const bundledFallbackRegistrations = [];
+  await extension(createPi(bundledFallbackRegistrations));
+  const bundledFallbackModelIds = bundledFallbackRegistrations[0].config.models.map((model) => model.id);
+  assert.ok(bundledFallbackModelIds.includes('gpt-5.5'), 'startup without API key or cache should fall back to bundled GPT models');
+  assert.ok(bundledFallbackModelIds.includes('claude-opus-4-8'), 'startup without API key or cache should fall back to bundled Claude models');
+  assert.equal(bundledFallbackModelIds.includes('gpt-image-1.5'), false, 'bundled fallback should keep unsupported native image models hidden');
+  writeFileSync(join(cacheDir, 'models.json'), liveCacheSnapshot, 'utf8');
+  process.env.THECLAWBAY_API_KEY = 'test-key';
 
   const staleCacheTime = Date.now() + 7 * 60 * 60 * 1000;
   assert.equal(readCachedModelIds(staleCacheTime), null, 'stale cache should be ignored by default');
@@ -288,11 +294,10 @@ try {
   };
   const staleRegistrations = [];
   const stalePi = createStalePi(staleRegistrations);
-  extension(stalePi);
+  await extension(stalePi);
   stalePi.registerProvider = () => {
     throw new Error('stale pi');
   };
-  await waitForRefresh();
   assert.equal(staleRegistrations.length, 1, 'stale extension refresh should not crash after initial registration');
 
   globalThis.fetch = async (url) => {
@@ -301,8 +306,7 @@ try {
   };
   const refreshCommands = {};
   const refreshRegistrations = [];
-  extension(createPi(refreshRegistrations, refreshCommands));
-  await waitForRefresh();
+  await extension(createPi(refreshRegistrations, refreshCommands));
   refreshRegistrations.length = 0;
   const refreshNotifications = [];
   assert.ok(refreshCommands['clawbay-refresh-models'], 'model refresh command should be registered');
@@ -336,7 +340,7 @@ try {
     return { ok: false, async json() { return {}; } };
   };
   const commands = {};
-  extension(createPi([], commands));
+  await extension(createPi([], commands));
   assert.ok(commands.quota, 'quota command should be registered');
   assert.ok(commands['clawbay-quota'], 'namespaced quota command alias should be registered');
   const notifications = [];
