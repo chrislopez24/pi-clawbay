@@ -16,6 +16,8 @@ export const THECLAWBAY_ANTHROPIC_VERSION_HEADER = "2023-06-01";
 export const MODEL_CACHE_VERSION = 3;
 export const MODEL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 export const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+export const MODEL_DISCOVERY_MAX_ATTEMPTS = 2;
+export const MODEL_DISCOVERY_RETRY_DELAY_MS = 250;
 
 export const GPT_54_UPSTREAM_MODEL_ID = "gpt-5.4";
 export const GPT_54_DEFAULT_MODEL_ID = "gpt-5.4";

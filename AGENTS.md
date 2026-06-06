@@ -10,7 +10,8 @@ Implemented:
 
 - `theclawbay` provider registered from `src/provider.ts`
 - Dynamic model discovery from TheClawBay OpenAI-compatible and Anthropic-compatible model endpoints
-- Local cached fallback model list when live discovery is unavailable
+- All-or-fallback startup discovery: both model discovery endpoints must respond successfully before live models replace cache/fallback
+- Local cached fallback model list when complete live discovery is unavailable
 - GPT/Codex routing through TheClawBay Codex Responses route
 - Claude routing through Anthropic Messages compatibility
 - Gemini routing through Pi's `google-generative-ai` transport

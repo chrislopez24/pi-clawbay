@@ -5,6 +5,8 @@ import type { ExtensionAPI, ExtensionCommandContext, ProviderModelConfig } from 
 import {
 	MODEL_CACHE_TTL_MS,
 	MODEL_CACHE_VERSION,
+	MODEL_DISCOVERY_MAX_ATTEMPTS,
+	MODEL_DISCOVERY_RETRY_DELAY_MS,
 	MODEL_DISCOVERY_TIMEOUT_MS,
 	THECLAWBAY_ANTHROPIC_VERSION_HEADER,
 	THECLAWBAY_CLAUDE_MODELS_URL,
@@ -140,8 +142,36 @@ export async function fetchOpenAIModelIds(apiKey: string): Promise<string[] | nu
 }
 
 export async function fetchOpenAIModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
+	for (let attempt = 1; attempt <= MODEL_DISCOVERY_MAX_ATTEMPTS; attempt += 1) {
+		const metadata = await fetchCompleteOpenAIModelMetadata(apiKey);
+		if (metadata) {
+			return metadata;
+		}
+		if (attempt < MODEL_DISCOVERY_MAX_ATTEMPTS) {
+			await waitForDiscoveryRetry();
+		}
+	}
+
+	return null;
+}
+
+function waitForDiscoveryRetry(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, MODEL_DISCOVERY_RETRY_DELAY_MS));
+}
+
+async function fetchCompleteOpenAIModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
 	const [openaiMetadata, claudeMetadata] = await Promise.all([fetchOpenAICompatibleModelMetadata(apiKey), fetchClaudeModelMetadata(apiKey)]);
-	const merged = normalizeOpenAIModelMetadata([...(openaiMetadata ?? []), ...(claudeMetadata ?? [])], { includePinned: true });
+	if (!openaiMetadata) {
+		debugLog("Skipping partial live model registration because /v1/models did not return a usable model list.");
+		return null;
+	}
+
+	if (!claudeMetadata) {
+		debugLog("Skipping partial live model registration because /anthropic/v1/models did not return a usable model list.");
+		return null;
+	}
+
+	const merged = normalizeOpenAIModelMetadata([...openaiMetadata, ...claudeMetadata], { includePinned: true });
 	return merged.length > 0 ? merged : null;
 }
 
@@ -185,7 +215,7 @@ async function fetchClaudeModelMetadata(apiKey: string): Promise<TheClawBayModel
 
 		const payload = (await response.json()) as ClaudeModelListResponse;
 		const models = normalizeOpenAIModelMetadata(extractClaudeModelMetadata(payload), { includePinned: false });
-		return models.length > 0 ? models : null;
+		return models;
 	} catch (error) {
 		debugLog(`Claude model discovery failed: ${error instanceof Error ? error.message : String(error)}`);
 		return null;

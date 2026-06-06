@@ -59,7 +59,7 @@ Model IDs are discovered dynamically at extension load from:
 - `GET https://api.theclawbay.com/v1/models`
 - `GET https://api.theclawbay.com/anthropic/v1/models`
 
-When `THECLAWBAY_API_KEY` is set, the extension performs live discovery during startup and registers those models before the extension finishes loading, so the first `pi --list-models` or `/model` view sees the current provider list. If discovery fails, or if `THECLAWBAY_API_KEY` is not set yet, startup falls back to the last successful discovery cache, even if it is stale, then to a bundled default list so `/model` still works. Successful live discovery updates the local cache during that startup path.
+When `THECLAWBAY_API_KEY` is set, the extension performs live discovery during startup and registers those models before the extension finishes loading, so the first `pi --list-models` or `/model` view sees the current provider list. Live discovery is all-or-fallback: the OpenAI-compatible `/v1/models` list and Anthropic `/anthropic/v1/models` list must both respond successfully before the live model list is accepted. A successful Anthropic response with no models is valid, but a failed or timed-out endpoint is not. If complete discovery fails after a short retry, or if `THECLAWBAY_API_KEY` is not set yet, startup falls back to the last successful discovery cache, even if it is stale, then to a bundled default list so `/model` still works. Successful live discovery updates the local cache during that startup path.
 
 ### Routing and Cache Behavior
 

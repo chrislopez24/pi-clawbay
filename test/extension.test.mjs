@@ -28,6 +28,70 @@ const originalFetch = globalThis.fetch;
 process.env.PI_CLAWBAY_CACHE_DIR = cacheDir;
 process.env.PI_CLAWBAY_IMAGE_DIR = imageDir;
 
+const LIVE_MODEL_IDS = [
+  'gpt-5.5',
+  'gpt-image-2',
+  'gpt-5.4',
+  'gpt-5.4[1m]',
+  'deepseek-v4-flash',
+  'gemini-3-pro-preview',
+  'claude-haiku-4-5',
+  'claude-opus-4-8',
+  'claude-sonnet-4-6',
+];
+
+const LIVE_OPENAI_MODEL_DATA = [
+  {
+    id: 'gpt-5.5',
+    display_name: 'GPT-5.5',
+    context_window: 384000,
+    supports_reasoning: true,
+    supported_reasoning_efforts: ['low', 'medium', 'high', 'xhigh'],
+    default_reasoning_effort: 'xhigh',
+  },
+  { id: 'gpt-image-2', display_name: 'GPT Image 2', supports_reasoning: false, supported_reasoning_efforts: [], default_reasoning_effort: null },
+  {
+    id: 'gpt-5.4',
+    display_name: 'GPT-5.4',
+    context_window: 272000,
+    supports_reasoning: true,
+    supported_reasoning_efforts: ['minimal', 'low', 'medium', 'high'],
+    default_reasoning_effort: 'medium',
+  },
+  {
+    id: 'deepseek-v4-flash',
+    display_name: 'DeepSeek V4 Flash',
+    context_window: 164000,
+    supports_reasoning: false,
+    supported_reasoning_efforts: [],
+    default_reasoning_effort: null,
+  },
+  {
+    id: 'gemini-3-pro-preview',
+    display_name: 'Gemini 3 Pro Preview',
+    supports_reasoning: false,
+    supported_reasoning_efforts: [],
+    default_reasoning_effort: null,
+  },
+  {
+    id: 'claude-opus-4-8',
+    display_name: 'claude-opus-4-8',
+    supports_reasoning: false,
+    supported_reasoning_efforts: [],
+    default_reasoning_effort: null,
+  },
+];
+
+const LIVE_CLAUDE_MODEL_DATA = [
+  { id: 'claude-haiku-4-5', display_name: 'Claude Haiku 4 5' },
+  { id: 'claude-opus-4-8', display_name: 'Claude Opus 4 8' },
+  { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4 6' },
+];
+
+const MINI_OPENAI_MODEL_DATA = [{ id: 'gpt-5.4-mini', context_window: 512000 }];
+const MINI_MODEL_IDS = ['gpt-5.4-mini'];
+const OPUS_CLAUDE_MODEL_DATA = [{ id: 'claude-opus-4-8', display_name: 'Claude Opus 4 8' }];
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -43,6 +107,33 @@ function createPi(registrations, commands = {}, handlers = {}) {
     on(name, handler) {
       handlers[name] = handler;
     },
+  };
+}
+
+function registrationModelIds(registrations, index = 0) {
+  return registrations[index].config.models.map((model) => model.id);
+}
+
+function discoveryEndpointResponse(value) {
+  const resolved = typeof value === 'function' ? value() : value;
+  if (resolved instanceof Error) {
+    throw resolved;
+  }
+  if (resolved === false) {
+    return { ok: false, async json() { return {}; } };
+  }
+  return { ok: true, async json() { return { data: resolved }; } };
+}
+
+function createDiscoveryFetch({ openai = LIVE_OPENAI_MODEL_DATA, claude = LIVE_CLAUDE_MODEL_DATA } = {}) {
+  return async (url) => {
+    if (String(url).endsWith('/anthropic/v1/models')) {
+      return discoveryEndpointResponse(claude);
+    }
+    if (String(url).endsWith('/v1/models')) {
+      return discoveryEndpointResponse(openai);
+    }
+    throw new Error(`unexpected fetch ${url}`);
   };
 }
 
@@ -62,73 +153,7 @@ function textDeltas(events) {
 
 try {
   process.env.THECLAWBAY_API_KEY = 'test-key';
-  globalThis.fetch = async (url) => {
-    if (String(url).endsWith('/anthropic/v1/models')) {
-      return {
-        ok: true,
-        async json() {
-          return {
-            data: [
-              { id: 'claude-haiku-4-5', display_name: 'Claude Haiku 4 5' },
-              { id: 'claude-opus-4-8', display_name: 'Claude Opus 4 8' },
-              { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4 6' },
-            ],
-          };
-        },
-      };
-    }
-    if (String(url).endsWith('/v1/models')) {
-      return {
-        ok: true,
-        async json() {
-          return {
-            data: [
-              {
-                id: 'gpt-5.5',
-                display_name: 'GPT-5.5',
-                context_window: 384000,
-                supports_reasoning: true,
-                supported_reasoning_efforts: ['low', 'medium', 'high', 'xhigh'],
-                default_reasoning_effort: 'xhigh',
-              },
-              { id: 'gpt-image-2', display_name: 'GPT Image 2', supports_reasoning: false, supported_reasoning_efforts: [], default_reasoning_effort: null },
-              {
-                id: 'gpt-5.4',
-                display_name: 'GPT-5.4',
-                context_window: 272000,
-                supports_reasoning: true,
-                supported_reasoning_efforts: ['minimal', 'low', 'medium', 'high'],
-                default_reasoning_effort: 'medium',
-              },
-              {
-                id: 'deepseek-v4-flash',
-                display_name: 'DeepSeek V4 Flash',
-                context_window: 164000,
-                supports_reasoning: false,
-                supported_reasoning_efforts: [],
-                default_reasoning_effort: null,
-              },
-              {
-                id: 'gemini-3-pro-preview',
-                display_name: 'Gemini 3 Pro Preview',
-                supports_reasoning: false,
-                supported_reasoning_efforts: [],
-                default_reasoning_effort: null,
-              },
-              {
-                id: 'claude-opus-4-8',
-                display_name: 'claude-opus-4-8',
-                supports_reasoning: false,
-                supported_reasoning_efforts: [],
-                default_reasoning_effort: null,
-              },
-            ],
-          };
-        },
-      };
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  };
+  globalThis.fetch = createDiscoveryFetch();
 
   const firstRegistrations = [];
   const firstHandlers = {};
@@ -136,17 +161,7 @@ try {
   assert.equal(firstResult, undefined, 'extension factory should resolve after startup discovery');
   assert.equal(firstRegistrations.length, 1, 'provider should register once after startup discovery resolves');
   assert.equal(typeof firstHandlers.message_end, 'function', 'context overflow normalization should be registered');
-  assert.deepEqual(firstRegistrations[0].config.models.map((model) => model.id), [
-    'gpt-5.5',
-    'gpt-image-2',
-    'gpt-5.4',
-    'gpt-5.4[1m]',
-    'deepseek-v4-flash',
-    'gemini-3-pro-preview',
-    'claude-haiku-4-5',
-    'claude-opus-4-8',
-    'claude-sonnet-4-6',
-  ]);
+  assert.deepEqual(registrationModelIds(firstRegistrations), LIVE_MODEL_IDS);
   const liveGpt55 = firstRegistrations[0].config.models.find((entry) => entry.id === 'gpt-5.5');
   assert.equal(liveGpt55?.contextWindow, 384000, 'live context_window should override the default Codex context window');
   assert.equal(liveGpt55?.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should expose xhigh from live metadata');
@@ -197,19 +212,56 @@ try {
   assert.equal(liveClaude?.maxTokens, 128000, 'new Opus models should expose the current Pi Opus output limit');
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
-  assert.deepEqual(cache.modelIds, ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6']);
+  assert.deepEqual(cache.modelIds, LIVE_MODEL_IDS);
   assert.equal(cache.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000, 'cache should preserve live context metadata');
   assert.equal(cache.models.find((model) => model.id === 'gpt-5.4[1m]')?.contextWindow, 1050000, 'cache should preserve the local 1m context override');
   assert.equal(cache.models.find((model) => model.id === 'deepseek-v4-flash')?.contextWindow, 164000, 'cache should preserve DeepSeek context metadata');
   assert.equal(cache.models.find((model) => model.id === 'gemini-3-pro-preview')?.supportsReasoning, false, 'cache should preserve live reasoning metadata');
 
+  const fullLiveCacheSnapshot = readFileSync(join(cacheDir, 'models.json'), 'utf8');
+  let transientOpenAIRequests = 0;
+  globalThis.fetch = createDiscoveryFetch({
+    claude: [],
+    openai: () => {
+      transientOpenAIRequests += 1;
+      return transientOpenAIRequests === 1 ? false : MINI_OPENAI_MODEL_DATA;
+    },
+  });
+  const transientStartupRegistrations = [];
+  await extension(createPi(transientStartupRegistrations));
+  assert.deepEqual(
+    registrationModelIds(transientStartupRegistrations),
+    MINI_MODEL_IDS,
+    'startup should retry complete live discovery before falling back to cache',
+  );
+  assert.equal(transientStartupRegistrations[0].config.models[0].contextWindow, 512000);
+  writeFileSync(join(cacheDir, 'models.json'), fullLiveCacheSnapshot, 'utf8');
+
   globalThis.fetch = async () => ({ ok: false, async json() { return {}; } });
   const secondRegistrations = [];
   await extension(createPi(secondRegistrations));
-  assert.deepEqual(secondRegistrations[0].config.models.map((model) => model.id), ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6']);
+  assert.deepEqual(registrationModelIds(secondRegistrations), LIVE_MODEL_IDS);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'deepseek-v4-flash')?.api, 'openai-completions');
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gemini-3-pro-preview')?.reasoning, true);
+
+  globalThis.fetch = createDiscoveryFetch({ openai: false, claude: OPUS_CLAUDE_MODEL_DATA });
+  const partialStartupRegistrations = [];
+  await extension(createPi(partialStartupRegistrations));
+  assert.deepEqual(
+    registrationModelIds(partialStartupRegistrations),
+    LIVE_MODEL_IDS,
+    'startup should ignore Claude-only partial discovery and keep the cached full model list',
+  );
+
+  globalThis.fetch = createDiscoveryFetch({ openai: MINI_OPENAI_MODEL_DATA, claude: false });
+  const missingClaudeStartupRegistrations = [];
+  await extension(createPi(missingClaudeStartupRegistrations));
+  assert.deepEqual(
+    registrationModelIds(missingClaudeStartupRegistrations),
+    LIVE_MODEL_IDS,
+    'startup should ignore OpenAI-only partial discovery and keep the cached full model list',
+  );
 
   delete process.env.THECLAWBAY_API_KEY;
   globalThis.fetch = async () => {
@@ -218,8 +270,8 @@ try {
   const cachedNoKeyRegistrations = [];
   await extension(createPi(cachedNoKeyRegistrations));
   assert.deepEqual(
-    cachedNoKeyRegistrations[0].config.models.map((model) => model.id),
-    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6'],
+    registrationModelIds(cachedNoKeyRegistrations),
+    LIVE_MODEL_IDS,
     'startup without an API key should fall back to the stale cache',
   );
   const liveCacheSnapshot = readFileSync(join(cacheDir, 'models.json'), 'utf8');
@@ -237,7 +289,7 @@ try {
   assert.equal(readCachedModelIds(staleCacheTime), null, 'stale cache should be ignored by default');
   assert.deepEqual(
     readCachedModelIds(staleCacheTime, { allowStale: true }),
-    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6'],
+    LIVE_MODEL_IDS,
     'stale cache should be available as a startup fallback',
   );
   assert.equal(
@@ -295,10 +347,7 @@ try {
   assert.deepEqual(opus48.compat, { forceAdaptiveThinking: true, supportsTemperature: false });
   assert.deepEqual(opus48.thinkingLevelMap, { xhigh: 'xhigh' });
 
-  globalThis.fetch = async (url) => {
-    if (String(url).endsWith('/anthropic/v1/models')) return { ok: true, async json() { return { data: [] }; } };
-    return { ok: true, async json() { return { data: [{ id: 'gpt-5.5' }] }; } };
-  };
+  globalThis.fetch = createDiscoveryFetch({ openai: [{ id: 'gpt-5.5' }], claude: [] });
   const staleRegistrations = [];
   const stalePi = createStalePi(staleRegistrations);
   await extension(stalePi);
@@ -307,10 +356,7 @@ try {
   };
   assert.equal(staleRegistrations.length, 1, 'stale extension refresh should not crash after initial registration');
 
-  globalThis.fetch = async (url) => {
-    if (String(url).endsWith('/anthropic/v1/models')) return { ok: true, async json() { return { data: [] }; } };
-    return { ok: true, async json() { return { data: [{ id: 'gpt-5.4-mini', context_window: 512000 }] }; } };
-  };
+  globalThis.fetch = createDiscoveryFetch({ openai: MINI_OPENAI_MODEL_DATA, claude: [] });
   const refreshCommands = {};
   const refreshRegistrations = [];
   await extension(createPi(refreshRegistrations, refreshCommands));
@@ -324,9 +370,35 @@ try {
       },
     },
   });
-  assert.deepEqual(refreshRegistrations.map((entry) => entry.config.models.map((model) => model.id)), [['gpt-5.4-mini']]);
+  assert.deepEqual(registrationModelIds(refreshRegistrations), MINI_MODEL_IDS);
   assert.equal(refreshRegistrations[0].config.models[0].contextWindow, 512000, 'manual refresh should apply live context metadata');
   assert.deepEqual(refreshNotifications, [{ message: 'Refreshed 1 TheClawBay model from live discovery', level: 'info' }]);
+
+  globalThis.fetch = createDiscoveryFetch({ openai: false, claude: OPUS_CLAUDE_MODEL_DATA });
+  refreshRegistrations.length = 0;
+  refreshNotifications.length = 0;
+  await refreshCommands['clawbay-refresh-models'].handler('', {
+    ui: {
+      notify(message, level) {
+        refreshNotifications.push({ message, level });
+      },
+    },
+  });
+  assert.deepEqual(refreshRegistrations, [], 'manual refresh should not re-register a Claude-only partial discovery result');
+  assert.deepEqual(refreshNotifications, [{ message: 'Failed to refresh TheClawBay models from live discovery', level: 'error' }]);
+
+  globalThis.fetch = createDiscoveryFetch({ openai: MINI_OPENAI_MODEL_DATA, claude: false });
+  refreshRegistrations.length = 0;
+  refreshNotifications.length = 0;
+  await refreshCommands['clawbay-refresh-models'].handler('', {
+    ui: {
+      notify(message, level) {
+        refreshNotifications.push({ message, level });
+      },
+    },
+  });
+  assert.deepEqual(refreshRegistrations, [], 'manual refresh should not re-register an OpenAI-only partial discovery result');
+  assert.deepEqual(refreshNotifications, [{ message: 'Failed to refresh TheClawBay models from live discovery', level: 'error' }]);
 
   globalThis.fetch = async (url) => {
     if (String(url).endsWith('/quota')) {
