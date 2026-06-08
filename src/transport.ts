@@ -7,16 +7,22 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { THECLAWBAY_CHATGPT_ACCOUNT_ID } from "./constants.js";
+import { THECLAWBAY_OPENAI_DISCOVERY_BASE_URL } from "./constants.js";
 import { streamSimpleTheClawBayImageGeneration } from "./image-generation.js";
 import { dedupeIds, isSupportedImageGenerationModel, resolveUpstreamModelId } from "./models.js";
+
+function getTheClawBayUserAgent(): string {
+	const platform = typeof process !== "undefined" ? process.platform : undefined;
+	const release = typeof process !== "undefined" ? process.version : undefined;
+	const arch = typeof process !== "undefined" ? process.arch : undefined;
+	return platform && release && arch ? `pi (${platform} ${release}; ${arch})` : "pi (browser)";
+}
 
 export function buildTheClawBayHeaders(options?: SimpleStreamOptions): Record<string, string> {
 	return {
 		...(options?.headers ?? {}),
-		"chatgpt-account-id": THECLAWBAY_CHATGPT_ACCOUNT_ID,
-		originator: "pi",
 		"OpenAI-Beta": "responses=experimental",
+		"User-Agent": getTheClawBayUserAgent(),
 		...(options?.sessionId ? { "session-id": options.sessionId, session_id: options.sessionId } : {}),
 	};
 }
@@ -64,6 +70,7 @@ export function createTheClawBayStreamModel(model: Model<Api>): Model<"openai-re
 	return {
 		...model,
 		id: resolveUpstreamModelId(model.id),
+		baseUrl: THECLAWBAY_OPENAI_DISCOVERY_BASE_URL,
 		provider: "openai-codex",
 		api: "openai-responses",
 	} as Model<"openai-responses">;

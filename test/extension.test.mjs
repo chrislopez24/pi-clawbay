@@ -438,11 +438,11 @@ try {
   ]);
 
   const headers = buildTheClawBayHeaders({ headers: { existing: '1' }, sessionId: 'session-123' });
-  assert.deepEqual(headers, {
+  assert.match(headers['User-Agent'], /^pi \(/, 'Codex requests should use a Pi-style User-Agent for TheClawBay compression compatibility');
+  assert.deepEqual({ ...headers, 'User-Agent': '<normalized>' }, {
     existing: '1',
-    'chatgpt-account-id': 'theclawbay',
-    originator: 'pi',
     'OpenAI-Beta': 'responses=experimental',
+    'User-Agent': '<normalized>',
     'session-id': 'session-123',
     session_id: 'session-123',
   });
@@ -553,6 +553,7 @@ try {
     maxTokens: 128000,
   });
   assert.equal(streamModel.id, 'gpt-5.4', '1m display model should be remapped to the upstream id');
+  assert.equal(streamModel.baseUrl, 'https://api.theclawbay.com/v1', 'GPT/Codex text should use TheClawBay direct OpenAI-compatible route');
   assert.equal(streamModel.provider, 'openai-codex', 'internal stream model should preserve Codex tool-call IDs');
   assert.equal(streamModel.api, 'openai-responses', 'internal stream model should use the Responses serializer');
 

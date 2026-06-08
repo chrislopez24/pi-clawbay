@@ -65,10 +65,10 @@ When `THECLAWBAY_API_KEY` is set, the extension performs live discovery during s
 
 The extension keeps one Pi provider, `theclawbay`, and routes by model family:
 
-- **GPT/Codex text models** (`gpt-*`, `*codex*`) use TheClawBay's native Codex route:
-  - `https://api.theclawbay.com/backend-api/codex`
-  - The custom `streamSimpleTheClawBayCodexResponses` transport is preserved for this path.
-  - This is the cache-critical path: Pi's OpenAI Responses serializer emits `prompt_cache_key` from the session id, and the transport keeps both `session-id` and legacy `session_id` affinity headers so repeated requests can hit TheClawBay/Codex prompt cache.
+- **GPT/Codex text models** (`gpt-*`, `*codex*`) use TheClawBay's OpenAI-compatible Responses route:
+  - `https://api.theclawbay.com/v1`
+  - The custom `streamSimpleTheClawBayCodexResponses` transport is preserved for model remapping and event provider restoration.
+  - This is the cache-critical path: Pi's OpenAI Responses serializer emits `prompt_cache_key` from the session id, and the transport keeps both `session-id` and legacy `session_id` affinity headers so repeated requests can hit TheClawBay/OpenAI prompt cache.
 - **DeepSeek models** (`deepseek-*`) use TheClawBay's OpenAI-compatible chat-completions route:
   - `https://api.theclawbay.com/v1`
   - Pi's `openai-completions` transport is used because it supports DeepSeek thinking controls and replays assistant `reasoning_content` fields on follow-up turns.
@@ -86,11 +86,9 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
 - **Image generation** (`gpt-image-2`) uses TheClawBay's direct OpenAI-compatible Images route:
   - `https://api.theclawbay.com/v1/images/generations`
 
-For GPT/Codex text requests, the extension keeps the native Codex semantics that are needed for existing behavior:
+For GPT/Codex text requests, the extension keeps the OpenAI Responses semantics that are needed for existing behavior:
 
 - `Authorization: Bearer $THECLAWBAY_API_KEY`
-- `chatgpt-account-id: theclawbay`
-- `originator: pi`
 - `OpenAI-Beta: responses=experimental`
 - `session-id` and legacy `session_id` when Pi provides a session id
 - `prompt_cache_key` in the request body for GPT/Codex cache affinity
@@ -118,7 +116,7 @@ If no explicit Pi reasoning level is selected, Pi still sends the official hidde
 
 Gemini now uses the correct Pi Google transport. If TheClawBay's `/v1beta` response includes `usageMetadata.cachedContentTokenCount`, Pi will count that as `cacheRead` usage. However, explicit Gemini cached-content creation is not available through TheClawBay at the moment: `v1beta/cachedContents` is blocked by the proxy (`proxy path not allowed: v1beta/cachedContents`). Do not expect or promise Gemini cache hits equivalent to the Codex path until TheClawBay allows that endpoint.
 
-The Codex cache behavior must not be degraded: GPT/Codex models should continue using the native Codex route, `prompt_cache_key`, `session-id`, and legacy `session_id` affinity.
+The Codex cache behavior must not be degraded: GPT/Codex models should continue sending `prompt_cache_key`, `session-id`, and legacy `session_id` on the `/v1` Responses route.
 
 Based on the live docs at `https://theclawbay.com/docs`:
 
@@ -236,7 +234,7 @@ export default async function (pi: ExtensionAPI) {
 
 | Model family | Base URL / Route | API Type |
 |--------------|------------------|----------|
-| `theclawbay/gpt-*`, `theclawbay/*codex*` | `https://api.theclawbay.com/backend-api/codex` | Custom Codex Responses transport (`theclawbay-codex-responses`) |
+| `theclawbay/gpt-*`, `theclawbay/*codex*` | `https://api.theclawbay.com/v1` | Custom Responses transport wrapper (`theclawbay-codex-responses`) |
 | `theclawbay/deepseek-*` | `https://api.theclawbay.com/v1/chat/completions` | Pi `openai-completions` transport with DeepSeek compat |
 | `theclawbay/claude-*` | `https://api.theclawbay.com/anthropic/v1/messages` | Pi `anthropic-messages` transport |
 | `theclawbay/gemini-*` | `https://api.theclawbay.com/v1beta` | Pi `google-generative-ai` transport |
@@ -315,7 +313,7 @@ PI_CLAWBAY_IMAGE_DIR=/tmp/pi-clawbay-images pi --no-extensions -e /path/to/pi-cl
 - Claude model returns an OpenAI/Codex-route error: upgrade/reload this extension and refresh models. `claude-*` models must use Pi's `anthropic-messages` transport and TheClawBay `/anthropic`, not `backend-api/codex/responses`.
 - Gemini model returns `404 upstream returned HTTP 404` on a Codex route: upgrade/reload this extension. `gemini-*` models must use Pi's `google-generative-ai` transport and TheClawBay `/v1beta`, not `backend-api/codex/responses`.
 - Gemini cache is not showing Codex-style cache hits: expected for now. TheClawBay currently blocks `v1beta/cachedContents`; Pi will still report `cachedContentTokenCount` as `cacheRead` if the upstream route returns it.
-- GPT/Codex cache behavior regresses: verify the request still uses `backend-api/codex`, includes `prompt_cache_key`, and sends `session-id` plus legacy `session_id` when Pi has a session id.
+- GPT/Codex cache behavior regresses: verify the request still uses `/v1/responses`, includes `prompt_cache_key`, and sends `session-id` plus legacy `session_id` when Pi has a session id.
 - `gpt-image-2` missing: run `/clawbay-refresh-models`; if discovery still omits it, TheClawBay may not expose it for your account.
 - `gpt-image-1.5` missing: native image output models are intentionally hidden until this extension has a dedicated tested image flow for them.
 
