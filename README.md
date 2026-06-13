@@ -1,6 +1,6 @@
 # TheClawBay Provider for Pi Coding Agent
 
-A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi) that enables access to GPT-5, Codex, Claude, supported Gemini, DeepSeek, and image-generation models through [TheClawBay](https://theclawbay.com) API.
+A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi) that enables access to GPT-5, Codex, Claude, supported Gemini, DeepSeek, open-weight, and image-generation models through [TheClawBay](https://theclawbay.com) API.
 
 ## Features
 
@@ -8,6 +8,7 @@ A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi)
 - **Claude Models** - Dynamically discovered `claude-*` models use Pi's native Anthropic Messages transport against TheClawBay's `/anthropic` route, including adaptive thinking support for current Opus/Sonnet models
 - **Gemini Models** - Dynamically discovered `gemini-*` models use Pi's native Google transport against TheClawBay's `/v1beta` route, including Pi-compatible thinking support by default
 - **DeepSeek Models** - Dynamically discovered `deepseek-*` models use Pi's OpenAI-compatible chat-completions transport with DeepSeek thinking replay compatibility
+- **Open-Weight Models** - Cache-verified discovered open-weight models use Pi's OpenAI-compatible chat-completions transport with prompt-cache markers and session-affinity headers
 - **Single Provider** - Only `theclawbay` is registered; routing is selected per model
 - **GPT-5.4 Split Options** - `gpt-5.4` and `gpt-5.4[1m]` for clearer cost/context choice
 - **GPT Image 2** - Generate PNG images through TheClawBay's direct OpenAI-compatible Images API
@@ -73,6 +74,11 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
   - `https://api.theclawbay.com/v1`
   - Pi's `openai-completions` transport is used because it supports DeepSeek thinking controls and replays assistant `reasoning_content` fields on follow-up turns.
   - This avoids intermittent thinking-mode failures such as `400 "The \`reasoning_content\` in the thinking mode must be passed back to the API."`
+- **Cache-verified open-weight models** currently include `glm-5.1`, `kimi-k2.6`, `kimi-k2.7-code`, and `mimo-v2.5-pro`; they use TheClawBay's OpenAI-compatible chat-completions route:
+  - `https://api.theclawbay.com/v1`
+  - Pi's `openai-completions` transport sends `stream_options.include_usage`, `store: false`, and `max_completion_tokens`.
+  - The model compat enables Anthropic-style `cache_control` markers plus `session_id`, `x-client-request-id`, and `x-session-affinity` headers. Live smoke testing confirmed cache hits through `prompt_tokens_details.cached_tokens` on repeated `kimi-k2.7-code` requests.
+  - Discovered open-weight IDs that respond without cache hits, or are temporarily unavailable upstream, remain hidden until they can be verified with real `cached_tokens` usage.
 - **Claude models** (`claude-*`) are registered per model with:
   - `api: "anthropic-messages"`
   - `baseUrl: "https://api.theclawbay.com/anthropic"`
@@ -120,6 +126,16 @@ Gemini now uses the correct Pi Google transport. If TheClawBay's `/v1beta` respo
 
 The Codex cache behavior must not be degraded: GPT/Codex models should continue sending `prompt_cache_key`, `session-id`, and legacy `session_id` on the `/v1` Responses route.
 
+### Open-Weight Cache Verification
+
+As of 2026-06-13, live testing against `POST https://api.theclawbay.com/v1/chat/completions` with repeated large prompts, `cache_control`, and session-affinity headers showed:
+
+- Cache hits confirmed through `prompt_tokens_details.cached_tokens`: `glm-5.1`, `kimi-k2.6`, `kimi-k2.7-code`, `mimo-v2.5-pro`.
+- Responded but did not report cache hits after repeated attempts, even with `prompt_cache_key` and long-retention fields: `gemma-4-31b-it`, `qwen3.5-397b-a17b`, `qwen3.6-27b`.
+- Temporarily unavailable upstream during verification: `glm-4.7`, `glm-4.7-flash`, `glm-5`, `kimi-k2.5`, `kimi-k2.5-lightning`, `minimax-m2.5`, `qwen3.5-9b`.
+
+Only the cache-hit-confirmed open-weight models are registered by this extension for now. Revisit the filtered models when TheClawBay starts returning `cached_tokens` for them or their upstream availability changes.
+
 Based on the live docs at `https://theclawbay.com/docs`:
 
 - OpenAI-compatible apps use `https://api.theclawbay.com/v1`
@@ -153,6 +169,7 @@ Why split it?
 - Current non-5.4 GPT-5/Codex variants default to `272,000` context and `128,000` max output tokens.
 - Current Claude 4.6+ variants default to `1,000,000` context in Pi metadata and a conservative `8,192` Pi `max_tokens` request cap. Anthropic advertises higher output ceilings, but using those as the default causes every short Pi turn to reserve a very large output budget through TheClawBay.
 - Gemini variants discovered from `/v1/models` use Pi's Google transport with `1,048,576` context and `65,536` max output tokens.
+- Open-weight variants preserve `context_window` from live discovery and default to `128,000` max output metadata.
 - `gpt-image-2` uses the direct `/v1/images/generations` path with `1024x1024` PNG output, `272,000` context metadata, and `65,536` max output metadata.
 
 ### Example Model List
@@ -175,7 +192,7 @@ Current fallback list in this package, used only when live discovery and cache a
 - `gpt-5.1-codex-max`
 - `gpt-5.1-codex-mini`
 
-Live discovery may add newer GPT/Codex, Claude, Gemini, and DeepSeek models such as `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-3.1-pro-preview`, or `gemini-3-flash-preview` when TheClawBay exposes them for your account.
+Live discovery may add newer GPT/Codex, Claude, Gemini, DeepSeek, and cache-verified open-weight models such as `gemini-2.5-pro`, `gemini-3.1-pro-preview`, `kimi-k2.7-code`, `kimi-k2.6`, `glm-5.1`, or `mimo-v2.5-pro` when TheClawBay exposes them for your account.
 
 `gpt-image-2` is exposed because TheClawBay's latest docs list it as the direct image-generation model for `POST /v1/images/generations`. Other native image-generation models returned by discovery, such as `gpt-image-1.5`, remain hidden until this extension has a dedicated, tested flow for them.
 
@@ -192,6 +209,8 @@ Use `/model` command in pi:
 /model theclawbay/claude-opus-4-8
 /model theclawbay/claude-sonnet-4-6
 /model theclawbay/gemini-3-flash-preview
+/model theclawbay/kimi-k2.7-code
+/model theclawbay/glm-5.1
 /model theclawbay/gpt-image-2
 ```
 
@@ -238,6 +257,7 @@ export default async function (pi: ExtensionAPI) {
 |--------------|------------------|----------|
 | `theclawbay/gpt-*`, `theclawbay/*codex*` | `https://api.theclawbay.com/v1` | Custom Responses transport wrapper (`theclawbay-codex-responses`) |
 | `theclawbay/deepseek-*` | `https://api.theclawbay.com/v1/chat/completions` | Pi `openai-completions` transport with DeepSeek compat |
+| `theclawbay/glm-5.1`, `theclawbay/kimi-k2.6`, `theclawbay/kimi-k2.7-code`, `theclawbay/mimo-v2.5-pro` | `https://api.theclawbay.com/v1/chat/completions` | Pi `openai-completions` transport with cache-control compat |
 | `theclawbay/claude-*` | `https://api.theclawbay.com/anthropic/v1/messages` | Pi `anthropic-messages` transport |
 | `theclawbay/gemini-*` | `https://api.theclawbay.com/v1beta` | Pi `google-generative-ai` transport |
 | `theclawbay/gpt-image-2` | `https://api.theclawbay.com/v1/images/generations` | Direct OpenAI-compatible Images API |
@@ -291,6 +311,13 @@ PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/
 
 # Gemini native /v1beta path (choose a gemini-* id shown by --list-models)
 PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gemini-3-flash-preview --thinking off --no-session -p "Say OK and nothing else."
+
+# Open-weight chat-completions path
+PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/kimi-k2.7-code --no-session -p "Say OK and nothing else."
+
+# Open-weight prompt-cache path: reuse the same session id so Pi emits cache_control and session-affinity headers
+PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/kimi-k2.7-code --session-id clawbay-openweights-cache-smoke -p "Remember this cache smoke token: clawbay-openweights-cache-smoke."
+PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/kimi-k2.7-code --session-id clawbay-openweights-cache-smoke -p "Reply with only the cache smoke token."
 
 # Claude native /anthropic path (choose a claude-* id shown by --list-models)
 PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/claude-opus-4-8 --thinking off --no-session -p "Say OK and nothing else."

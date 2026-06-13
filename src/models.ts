@@ -20,10 +20,12 @@ import {
 import { createClaudeModelConfig, formatClaudeModelName, isClaudeModelId } from "./claude-models.js";
 import { createDeepSeekModelConfig, formatDeepSeekModelName, isDeepSeekModelId } from "./deepseek-models.js";
 import { createGoogleModelConfig, isGoogleModelId, resolveGoogleThinkingLevelMap, supportsGoogleThinking } from "./google-models.js";
+import { createOpenWeightModelConfig, formatOpenWeightModelName, isCacheVerifiedOpenWeightModelId, isOpenWeightModelId } from "./open-weights.js";
 import type { TheClawBayModelMetadata } from "./types.js";
 
 export { isGoogleModelId } from "./google-models.js";
 export { isClaudeModelId } from "./claude-models.js";
+export { isCacheVerifiedOpenWeightModelId, isOpenWeightModelId } from "./open-weights.js";
 
 type ModelSource = string | TheClawBayModelMetadata;
 type ThinkingLevelMap = NonNullable<ProviderModelConfig["thinkingLevelMap"]>;
@@ -107,11 +109,23 @@ function formatGenericModelName(id: string): string {
 		return formatClaudeModelName(id, formatModelNamePart);
 	}
 
+	if (isOpenWeightModelId(id)) {
+		return formatOpenWeightModelName(id, formatModelNamePart);
+	}
+
 	return id.split("-").map(formatModelNamePart).join(" ");
 }
 
 function formatModelNamePart(part: string): string {
-	return /^\d+(\.\d+)?$/.test(part) ? part.toUpperCase() : toTitleCase(part);
+	if (/^\d+(\.\d+)?$/.test(part)) {
+		return part.toUpperCase();
+	}
+
+	if (/^\d+(\.\d+)?[a-z]+$/i.test(part) || /^[a-z]+\d+(\.\d+)?[a-z]*$/i.test(part)) {
+		return part.toUpperCase();
+	}
+
+	return toTitleCase(part);
 }
 
 export function isSupportedImageGenerationModel(id: string): boolean {
@@ -245,6 +259,10 @@ function createOpenAIModel(source: ModelSource): ProviderModelConfig {
 		return createClaudeModelConfig(metadata, formatClaudeModelName(id, formatModelNamePart));
 	}
 
+	if (isCacheVerifiedOpenWeightModelId(id)) {
+		return createOpenWeightModelConfig(metadata, name, cost);
+	}
+
 	return createModelConfig(id, name, cost, resolveContextWindow(metadata, OPENAI_DEFAULT_CONTEXT_WINDOW), OPENAI_DEFAULT_MAX_TOKENS, options);
 }
 
@@ -276,6 +294,10 @@ export function normalizeOpenAIModelMetadata(
 
 function normalizeOpenAIModelId(id: string): string[] {
 	if (id === "gpt-5.4-pro" || isHiddenImageGenerationModel(id)) {
+		return [];
+	}
+
+	if (isOpenWeightModelId(id) && !isCacheVerifiedOpenWeightModelId(id)) {
 		return [];
 	}
 

@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { streamSimpleGoogle } from '@earendil-works/pi-ai';
 import { streamSimpleAnthropic } from '@earendil-works/pi-ai/anthropic';
+import { streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/openai-completions';
 import extension from '../dist/index.js';
 import { createGoogleModelConfig, isGoogleModelId } from '../dist/google-models.js';
 import { readCachedModelIds, readCachedModelMetadata } from '../dist/model-cache.js';
@@ -36,6 +37,10 @@ const LIVE_MODEL_IDS = [
   'gpt-5.4[1m]',
   'deepseek-v4-flash',
   'gemini-3-pro-preview',
+  'kimi-k2.7-code',
+  'kimi-k2.6',
+  'glm-5.1',
+  'mimo-v2.5-pro',
   'claude-haiku-4-5',
   'claude-opus-4-8',
   'claude-sonnet-4-6',
@@ -74,6 +79,12 @@ const LIVE_OPENAI_MODEL_DATA = [
     supported_reasoning_efforts: [],
     default_reasoning_effort: null,
   },
+  { id: 'kimi-k2.7-code', display_name: 'Kimi K2.7 Code', context_window: 262144, supports_reasoning: false, supported_reasoning_efforts: [], default_reasoning_effort: null },
+  { id: 'kimi-k2.6', display_name: 'Kimi K2.6', context_window: 262144, supports_reasoning: false, supported_reasoning_efforts: [], default_reasoning_effort: null },
+  { id: 'glm-5.1', display_name: 'GLM 5.1', context_window: 202752, supports_reasoning: false, supported_reasoning_efforts: [], default_reasoning_effort: null },
+  { id: 'gemma-4-31b-it', display_name: 'Gemma 4 31B IT', context_window: 262144, supports_reasoning: false, supported_reasoning_efforts: [], default_reasoning_effort: null },
+  { id: 'mimo-v2.5-pro', display_name: 'Mimo V2.5 Pro', context_window: 1000000, supports_reasoning: false, supported_reasoning_efforts: [], default_reasoning_effort: null },
+  { id: 'qwen3.5-397b-a17b', display_name: 'Qwen 3.5 397B A17B', context_window: 262144, supports_reasoning: false, supported_reasoning_efforts: [], default_reasoning_effort: null },
   {
     id: 'claude-opus-4-8',
     display_name: 'claude-opus-4-8',
@@ -163,6 +174,11 @@ try {
   assert.equal(firstRegistrations.length, 1, 'provider should register once after startup discovery resolves');
   assert.equal(typeof firstHandlers.message_end, 'function', 'context overflow normalization should be registered');
   assert.deepEqual(registrationModelIds(firstRegistrations), LIVE_MODEL_IDS);
+  assert.equal(
+    registrationModelIds(firstRegistrations).includes('qwen3.5-397b-a17b'),
+    false,
+    'open-weight models that do not return prompt-cache hits should not be registered yet',
+  );
   const liveGpt55 = firstRegistrations[0].config.models.find((entry) => entry.id === 'gpt-5.5');
   assert.equal(liveGpt55?.contextWindow, 384000, 'live context_window should override the default Codex context window');
   assert.equal(liveGpt55?.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should expose xhigh from live metadata');
@@ -184,6 +200,16 @@ try {
   );
   assert.equal(liveGemini?.contextWindow, 1048576, 'Gemini models should use the native Gemini context window');
   assert.equal(liveGemini?.maxTokens, 65536, 'Gemini models should use the native Gemini output limit');
+  const liveOpenWeight = firstRegistrations[0].config.models.find((entry) => entry.id === 'kimi-k2.7-code');
+  assert.equal(liveOpenWeight?.api, 'openai-completions', 'open-weight models should use Pi OpenAI chat completions compatibility');
+  assert.equal(liveOpenWeight?.baseUrl, 'https://api.theclawbay.com/v1', 'open-weight models should use TheClawBay OpenAI-compatible base URL');
+  assert.equal(liveOpenWeight?.reasoning, false, 'open-weight models should not expose Pi reasoning controls without live reasoning metadata');
+  assert.equal(liveOpenWeight?.contextWindow, 262144, 'open-weight models should preserve live context metadata');
+  assert.deepEqual(
+    liveOpenWeight?.compat,
+    { cacheControlFormat: 'anthropic', sendSessionAffinityHeaders: true },
+    'open-weight models should request cache-control markers and session-affinity headers for prompt-cache hits',
+  );
   const liveDeepSeek = firstRegistrations[0].config.models.find((entry) => entry.id === 'deepseek-v4-flash');
   assert.equal(liveDeepSeek?.api, 'openai-completions', 'DeepSeek models should use Pi OpenAI chat completions compatibility');
   assert.equal(liveDeepSeek?.baseUrl, 'https://api.theclawbay.com/v1', 'DeepSeek models should use TheClawBay OpenAI-compatible base URL');
@@ -226,6 +252,7 @@ try {
   assert.equal(cache.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000, 'cache should preserve live context metadata');
   assert.equal(cache.models.find((model) => model.id === 'gpt-5.4[1m]')?.contextWindow, 1050000, 'cache should preserve the local 1m context override');
   assert.equal(cache.models.find((model) => model.id === 'deepseek-v4-flash')?.contextWindow, 164000, 'cache should preserve DeepSeek context metadata');
+  assert.equal(cache.models.find((model) => model.id === 'kimi-k2.7-code')?.contextWindow, 262144, 'cache should preserve open-weight context metadata');
   assert.equal(cache.models.find((model) => model.id === 'gemini-3-pro-preview')?.supportsReasoning, false, 'cache should preserve live reasoning metadata');
 
   const fullLiveCacheSnapshot = readFileSync(join(cacheDir, 'models.json'), 'utf8');
@@ -253,6 +280,7 @@ try {
   assert.deepEqual(registrationModelIds(secondRegistrations), LIVE_MODEL_IDS);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'deepseek-v4-flash')?.api, 'openai-completions');
+  assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'kimi-k2.7-code')?.compat?.cacheControlFormat, 'anthropic');
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gemini-3-pro-preview')?.reasoning, true);
 
   globalThis.fetch = createDiscoveryFetch({ openai: false, claude: OPUS_CLAUDE_MODEL_DATA });
@@ -330,9 +358,9 @@ try {
   assert.equal(legacyGemini.baseUrl, 'https://api.theclawbay.com/v1beta', 'legacy cached Gemini ids should still use the Gemini-compatible base URL');
 
   assert.deepEqual(
-    normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-2', 'gpt-image-1.5', 'gpt-5.4', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-opus-4-8'], { includePinned: true }),
-    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'claude-opus-4-8'],
-    'gpt-image-2 should be exposed while unsupported native image models stay hidden',
+    normalizeOpenAIModelIds(['gpt-5.5', 'gpt-image-2', 'gpt-image-1.5', 'gpt-5.4', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'kimi-k2.7-code', 'qwen3.5-397b-a17b', 'claude-opus-4-8'], { includePinned: true }),
+    ['gpt-5.5', 'gpt-image-2', 'gpt-5.4', 'gpt-5.4[1m]', 'deepseek-v4-flash', 'gemini-3-pro-preview', 'kimi-k2.7-code', 'claude-opus-4-8'],
+    'unsupported native image and non-cache-hit open-weight models should stay hidden',
   );
 
   const deepseekModel = buildOpenAIModels([{ id: 'deepseek-v4-flash', supportsReasoning: false, supportedReasoningEfforts: [] }])[0];
@@ -343,6 +371,82 @@ try {
   assert.equal(deepseekModel.compat?.thinkingFormat, 'deepseek');
   assert.equal(deepseekModel.compat?.requiresReasoningContentOnAssistantMessages, true);
   assert.deepEqual(deepseekModel.thinkingLevelMap, { minimal: null, low: null, medium: null, high: 'high', xhigh: 'max' });
+
+  const openWeightModel = buildOpenAIModels([{ id: 'kimi-k2.7-code', contextWindow: 262144, supportsReasoning: false }])[0];
+  assert.equal(openWeightModel.name, 'Kimi K2.7 Code');
+  assert.equal(openWeightModel.api, 'openai-completions');
+  assert.equal(openWeightModel.baseUrl, 'https://api.theclawbay.com/v1');
+  assert.equal(openWeightModel.reasoning, false);
+  assert.equal(openWeightModel.contextWindow, 262144);
+  assert.equal(openWeightModel.maxTokens, 128000);
+  assert.deepEqual(openWeightModel.compat, { cacheControlFormat: 'anthropic', sendSessionAffinityHeaders: true });
+
+  let openWeightRequest;
+  globalThis.fetch = async (url, init) => {
+    openWeightRequest = {
+      url: String(url),
+      body: JSON.parse(String(init.body)),
+      headers: Object.fromEntries(new Headers(init.headers).entries()),
+    };
+
+    return new Response(
+      [
+        'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"kimi-k2.7-code","choices":[{"index":0,"delta":{"role":"assistant","content":"OK"},"finish_reason":null}]}',
+        '',
+        'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"kimi-k2.7-code","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":1,"total_tokens":101,"prompt_tokens_details":{"cached_tokens":64}}}',
+        '',
+        'data: [DONE]',
+        '',
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  };
+  const openWeightStream = streamSimpleOpenAICompletions(
+    {
+      ...openWeightModel,
+      provider: 'theclawbay',
+      api: 'openai-completions',
+      baseUrl: 'https://api.theclawbay.com/v1',
+    },
+    {
+      systemPrompt: 'Cacheable system prompt.',
+      messages: [
+        { role: 'user', content: 'Reply exactly OK.', timestamp: 0 },
+      ],
+      tools: [
+        {
+          name: 'read',
+          description: 'Read a file',
+          parameters: {
+            type: 'object',
+            properties: { path: { type: 'string' } },
+            required: ['path'],
+          },
+        },
+      ],
+    },
+    { apiKey: 'test-key', sessionId: 'session-open-weight-cache', cacheRetention: 'short', maxTokens: 16 },
+  );
+  const openWeightEvents = [];
+  for await (const event of openWeightStream) {
+    openWeightEvents.push(event);
+  }
+  const openWeightDone = openWeightEvents.find((event) => event.type === 'done');
+  assert.equal(openWeightRequest.url, 'https://api.theclawbay.com/v1/chat/completions');
+  assert.equal(openWeightRequest.headers.session_id, 'session-open-weight-cache');
+  assert.equal(openWeightRequest.headers['x-client-request-id'], 'session-open-weight-cache');
+  assert.equal(openWeightRequest.headers['x-session-affinity'], 'session-open-weight-cache');
+  assert.equal(openWeightRequest.body.model, 'kimi-k2.7-code');
+  assert.equal(openWeightRequest.body.store, false);
+  assert.equal(openWeightRequest.body.max_completion_tokens, 16);
+  assert.equal(openWeightRequest.body.messages[0].content[0].cache_control.type, 'ephemeral');
+  assert.equal(openWeightRequest.body.messages[1].content[0].cache_control.type, 'ephemeral');
+  assert.equal(openWeightRequest.body.tools[0].cache_control.type, 'ephemeral');
+  assert.ok(openWeightDone, 'open-weight models should stream through Pi openai-completions');
+  assert.equal(openWeightDone.message.provider, 'theclawbay');
+  assert.equal(openWeightDone.message.api, 'openai-completions');
+  assert.equal(openWeightDone.message.model, 'kimi-k2.7-code');
+  assert.equal(openWeightDone.message.usage.cacheRead, 64, 'open-weight cached_tokens usage should be reported as cacheRead');
 
   const gptImage2 = buildOpenAIModels(['gpt-image-2'])[0];
   assert.equal(gptImage2.name, 'GPT Image 2');
