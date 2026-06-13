@@ -16,6 +16,11 @@ type ClaudeCompat = NonNullable<ProviderModelConfig["compat"]> & {
 	supportsTemperature?: boolean;
 };
 
+const THECLAWBAY_CLAUDE_PROXY_COMPAT: ClaudeCompat = {
+	supportsEagerToolInputStreaming: false,
+	supportsCacheControlOnTools: false,
+};
+
 const CLAUDE_KNOWN_COSTS: Record<string, ProviderModelConfig["cost"]> = {
 	"claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
 	"claude-haiku-4-5-20251001": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
@@ -63,14 +68,14 @@ function resolveClaudeMaxTokens(id: string): number {
 
 function resolveClaudeCompat(id: string): ClaudeCompat | undefined {
 	if (id === "claude-opus-4-7" || id === "claude-opus-4-8") {
-		return { forceAdaptiveThinking: true, supportsTemperature: false };
+		return { ...THECLAWBAY_CLAUDE_PROXY_COMPAT, forceAdaptiveThinking: true, supportsTemperature: false };
 	}
 
 	if (id === "claude-opus-4-6" || id === "claude-sonnet-4-6") {
-		return { forceAdaptiveThinking: true };
+		return { ...THECLAWBAY_CLAUDE_PROXY_COMPAT, forceAdaptiveThinking: true };
 	}
 
-	return undefined;
+	return { ...THECLAWBAY_CLAUDE_PROXY_COMPAT };
 }
 
 function resolveClaudeThinkingLevelMap(id: string): ProviderModelConfig["thinkingLevelMap"] | undefined {

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { streamSimpleGoogle } from '@earendil-works/pi-ai';
+import { streamSimpleAnthropic } from '@earendil-works/pi-ai/anthropic';
 import extension from '../dist/index.js';
 import { createGoogleModelConfig, isGoogleModelId } from '../dist/google-models.js';
 import { readCachedModelIds, readCachedModelMetadata } from '../dist/model-cache.js';
@@ -206,10 +207,19 @@ try {
   assert.equal(liveClaude?.api, 'anthropic-messages', 'Claude models should use Pi\'s native Anthropic Messages transport');
   assert.equal(liveClaude?.baseUrl, 'https://api.theclawbay.com/anthropic', 'Claude models should use TheClawBay\'s Anthropic-compatible base URL');
   assert.equal(liveClaude?.reasoning, true, 'Claude models should expose Pi Anthropic extended/adaptive thinking');
-  assert.deepEqual(liveClaude?.compat, { forceAdaptiveThinking: true, supportsTemperature: false }, 'new Opus models should use Pi adaptive thinking compatibility');
+  assert.deepEqual(
+    liveClaude?.compat,
+    {
+      supportsEagerToolInputStreaming: false,
+      supportsCacheControlOnTools: false,
+      forceAdaptiveThinking: true,
+      supportsTemperature: false,
+    },
+    'new Opus models should use Pi adaptive thinking compatibility and conservative Anthropic proxy settings',
+  );
   assert.deepEqual(liveClaude?.thinkingLevelMap, { xhigh: 'xhigh' }, 'Opus 4.8 should expose native xhigh effort');
   assert.equal(liveClaude?.contextWindow, 1000000, 'new Claude 4.6+ models should use 1M context in Pi metadata');
-  assert.equal(liveClaude?.maxTokens, 128000, 'new Opus models should expose the current Pi Opus output limit');
+  assert.equal(liveClaude?.maxTokens, 8192, 'Claude models should use a conservative Pi default max_tokens value');
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
   assert.deepEqual(cache.modelIds, LIVE_MODEL_IDS);
@@ -344,8 +354,81 @@ try {
   assert.equal(opus48.name, 'Claude Opus 4.8');
   assert.equal(opus48.api, 'anthropic-messages');
   assert.equal(opus48.baseUrl, 'https://api.theclawbay.com/anthropic');
-  assert.deepEqual(opus48.compat, { forceAdaptiveThinking: true, supportsTemperature: false });
+  assert.deepEqual(opus48.compat, {
+    supportsEagerToolInputStreaming: false,
+    supportsCacheControlOnTools: false,
+    forceAdaptiveThinking: true,
+    supportsTemperature: false,
+  });
   assert.deepEqual(opus48.thinkingLevelMap, { xhigh: 'xhigh' });
+
+  let anthropicRequest;
+  globalThis.fetch = async (url, init) => {
+    anthropicRequest = {
+      url: String(url),
+      body: JSON.parse(String(init.body)),
+      headers: Object.fromEntries(new Headers(init.headers).entries()),
+    };
+
+    return new Response(
+      [
+        'event: message_start',
+        'data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-opus-4-8","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}',
+        '',
+        'event: content_block_start',
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        '',
+        'event: content_block_delta',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK."}}',
+        '',
+        'event: content_block_stop',
+        'data: {"type":"content_block_stop","index":0}',
+        '',
+        'event: message_delta',
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}',
+        '',
+        'event: message_stop',
+        'data: {"type":"message_stop"}',
+        '',
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  };
+  const anthropicStream = streamSimpleAnthropic(
+    {
+      ...opus48,
+      provider: 'theclawbay',
+      api: 'anthropic-messages',
+      baseUrl: 'https://api.theclawbay.com/anthropic',
+    },
+    {
+      messages: [{ role: 'user', content: 'Respond only OK.', timestamp: 0 }],
+      tools: [
+        {
+          name: 'read',
+          description: 'Read a file',
+          parameters: {
+            type: 'object',
+            properties: { path: { type: 'string' } },
+            required: ['path'],
+          },
+        },
+      ],
+    },
+    { apiKey: 'test-key', reasoning: 'high' },
+  );
+  const anthropicEvents = [];
+  for await (const event of anthropicStream) {
+    anthropicEvents.push(event);
+  }
+  assert.equal(anthropicRequest.url, 'https://api.theclawbay.com/anthropic/v1/messages');
+  assert.equal(anthropicRequest.body.max_tokens, 8192, 'Claude requests should not reserve the upstream 64k/128k output limit by default');
+  assert.equal(anthropicRequest.body.thinking?.type, 'adaptive', 'Claude 4.8 should use adaptive thinking through Pi Anthropic compat');
+  assert.deepEqual(anthropicRequest.body.output_config, { effort: 'high' });
+  assert.equal('budget_tokens' in (anthropicRequest.body.thinking ?? {}), false, 'Claude 4.8 should not send legacy budget-based thinking');
+  assert.equal('eager_input_streaming' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile eager_input_streaming');
+  assert.equal('cache_control' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile tool cache_control');
+  assert.ok(anthropicEvents.find((event) => event.type === 'done'), 'Claude should stream through Pi Anthropic transport');
 
   globalThis.fetch = createDiscoveryFetch({ openai: [{ id: 'gpt-5.5' }], claude: [] });
   const staleRegistrations = [];

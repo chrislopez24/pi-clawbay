@@ -1,6 +1,6 @@
 {
   "name": "pi-clawbay",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "TheClawBay provider extension for Pi Coding Agent - access GPT-5, Codex, Claude, Gemini, DeepSeek, and image models",
   "type": "module",
   "main": "dist/index.js",
@@ -16,7 +16,7 @@
     "README.md"
   ],
   "scripts": {
-    "clean": "rm -rf dist",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc",
     "check": "tsc --noEmit",
     "prepare": "npm run build",
@@ -51,7 +51,7 @@
   },
   "homepage": "https://github.com/chrislopez24/pi-clawbay#readme",
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.78.1",
+    "@earendil-works/pi-coding-agent": "^0.79.2",
     "@types/node": "^22.0.0",
     "typescript": "^5.0.0"
   },
@@ -61,9 +61,9 @@
     }
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.78.1"
+    "@earendil-works/pi-ai": "^0.79.2"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.78.1"
+    "@earendil-works/pi-coding-agent": ">=0.79.2"
   }
 }

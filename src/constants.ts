@@ -48,10 +48,12 @@ export const OPENAI_IMAGE_MAX_TOKENS = 65536;
 export const GOOGLE_GEMINI_CONTEXT_WINDOW = 1048576;
 export const GOOGLE_GEMINI_MAX_TOKENS = 65536;
 export const CLAUDE_CONTEXT_WINDOW = 1000000;
-export const CLAUDE_DEFAULT_MAX_TOKENS = 64000;
-export const CLAUDE_HAIKU_MAX_TOKENS = 64000;
-export const CLAUDE_SONNET_MAX_TOKENS = 64000;
-export const CLAUDE_OPUS_MAX_TOKENS = 128000;
+// Pi sends model.maxTokens as the default Anthropic max_tokens value.
+// Keep Claude conservative so short coding-agent turns do not reserve huge output budgets.
+export const CLAUDE_DEFAULT_MAX_TOKENS = 8192;
+export const CLAUDE_HAIKU_MAX_TOKENS = 8192;
+export const CLAUDE_SONNET_MAX_TOKENS = 8192;
+export const CLAUDE_OPUS_MAX_TOKENS = 8192;
 
 export const HIDDEN_MODEL_ID_PREFIXES = ["gpt-image-"] as const;
 export const PINNED_MODEL_IDS: string[] = [];
