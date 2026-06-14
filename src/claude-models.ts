@@ -19,6 +19,7 @@ type ClaudeCompat = NonNullable<ProviderModelConfig["compat"]> & {
 const THECLAWBAY_CLAUDE_PROXY_COMPAT: ClaudeCompat = {
 	supportsEagerToolInputStreaming: false,
 	supportsCacheControlOnTools: false,
+	sendSessionAffinityHeaders: true,
 };
 
 const CLAUDE_KNOWN_COSTS: Record<string, ProviderModelConfig["cost"]> = {

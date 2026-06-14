@@ -238,6 +238,7 @@ try {
     {
       supportsEagerToolInputStreaming: false,
       supportsCacheControlOnTools: false,
+      sendSessionAffinityHeaders: true,
       forceAdaptiveThinking: true,
       supportsTemperature: false,
     },
@@ -461,6 +462,7 @@ try {
   assert.deepEqual(opus48.compat, {
     supportsEagerToolInputStreaming: false,
     supportsCacheControlOnTools: false,
+    sendSessionAffinityHeaders: true,
     forceAdaptiveThinking: true,
     supportsTemperature: false,
   });
@@ -477,7 +479,7 @@ try {
     return new Response(
       [
         'event: message_start',
-        'data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-opus-4-8","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}',
+        'data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-opus-4-8","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0,"cache_read_input_tokens":6,"cache_creation_input_tokens":4}}}',
         '',
         'event: content_block_start',
         'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
@@ -489,7 +491,7 @@ try {
         'data: {"type":"content_block_stop","index":0}',
         '',
         'event: message_delta',
-        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}',
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1,"cache_read_input_tokens":6,"cache_creation_input_tokens":4}}',
         '',
         'event: message_stop',
         'data: {"type":"message_stop"}',
@@ -519,7 +521,7 @@ try {
         },
       ],
     },
-    { apiKey: 'test-key', reasoning: 'high' },
+    { apiKey: 'test-key', reasoning: 'high', sessionId: 'session-claude-cache', cacheRetention: 'short' },
   );
   const anthropicEvents = [];
   for await (const event of anthropicStream) {
@@ -527,12 +529,16 @@ try {
   }
   assert.equal(anthropicRequest.url, 'https://api.theclawbay.com/anthropic/v1/messages');
   assert.equal(anthropicRequest.body.max_tokens, 8192, 'Claude requests should not reserve the upstream 64k/128k output limit by default');
+  assert.equal(anthropicRequest.headers['x-session-affinity'], 'session-claude-cache', 'Claude requests should send session affinity for prompt-cache routing');
   assert.equal(anthropicRequest.body.thinking?.type, 'adaptive', 'Claude 4.8 should use adaptive thinking through Pi Anthropic compat');
   assert.deepEqual(anthropicRequest.body.output_config, { effort: 'high' });
   assert.equal('budget_tokens' in (anthropicRequest.body.thinking ?? {}), false, 'Claude 4.8 should not send legacy budget-based thinking');
   assert.equal('eager_input_streaming' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile eager_input_streaming');
   assert.equal('cache_control' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile tool cache_control');
-  assert.ok(anthropicEvents.find((event) => event.type === 'done'), 'Claude should stream through Pi Anthropic transport');
+  assert.equal(anthropicRequest.body.messages[0].content[0].cache_control.type, 'ephemeral', 'Claude conversation cache markers should be preserved');
+  const anthropicDone = anthropicEvents.find((event) => event.type === 'done');
+  assert.ok(anthropicDone, 'Claude should stream through Pi Anthropic transport');
+  assert.equal(anthropicDone.message.usage.cacheRead, 6, 'Claude cache_read_input_tokens should be reported as cacheRead');
 
   globalThis.fetch = createDiscoveryFetch({ openai: [{ id: 'gpt-5.5' }], claude: [] });
   const staleRegistrations = [];

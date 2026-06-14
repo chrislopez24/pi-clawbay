@@ -5,7 +5,7 @@ A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi)
 ## Features
 
 - **GPT-5 & Codex Models** - Access via TheClawBay's native Codex Responses route with session-based prompt-cache hits
-- **Claude Models** - Dynamically discovered `claude-*` models use Pi's native Anthropic Messages transport against TheClawBay's `/anthropic` route, including adaptive thinking support for current Opus/Sonnet models
+- **Claude Models** - Dynamically discovered `claude-*` models use Pi's native Anthropic Messages transport against TheClawBay's `/anthropic` route, including adaptive thinking support and prompt-cache affinity for current Opus/Sonnet models
 - **Gemini Models** - Dynamically discovered `gemini-*` models use Pi's native Google transport against TheClawBay's `/v1beta` route, including Pi-compatible thinking support by default
 - **DeepSeek Models** - Dynamically discovered `deepseek-*` models use Pi's OpenAI-compatible chat-completions transport with DeepSeek thinking replay compatibility
 - **Open-Weight Models** - Cache-verified discovered open-weight models use Pi's OpenAI-compatible chat-completions transport with prompt-cache markers and session-affinity headers
@@ -84,7 +84,7 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
   - `baseUrl: "https://api.theclawbay.com/anthropic"`
   - Pi's native Anthropic transport is used for `/v1/messages`, tool use, prompt-cache markers, and Claude thinking replay.
   - Claude requests require Pi `0.79.2+` so custom model compat can force adaptive thinking for new Claude aliases such as `claude-opus-4-8`.
-  - TheClawBay Claude tool payloads intentionally omit `tools[].eager_input_streaming` and tool-level `cache_control`; system and conversation cache markers are preserved for prompt-cache hits.
+  - TheClawBay Claude tool payloads intentionally omit `tools[].eager_input_streaming` and tool-level `cache_control`; system and conversation cache markers plus `x-session-affinity` are preserved for prompt-cache hits.
   - Current discovered Claude models include `claude-haiku-4-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, and `claude-sonnet-4-6`.
 - **Gemini models** (`gemini-*`) are registered per model with:
   - `api: "google-generative-ai"`
