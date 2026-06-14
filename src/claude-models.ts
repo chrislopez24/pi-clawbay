@@ -6,6 +6,7 @@ import {
 	CLAUDE_OPUS_MAX_TOKENS,
 	CLAUDE_SONNET_MAX_TOKENS,
 	MODEL_INPUTS,
+	THECLAWBAY_ANTHROPIC_API,
 	THECLAWBAY_CLAUDE_BASE_URL,
 	ZERO_COST,
 } from "./constants.js";
@@ -80,6 +81,10 @@ function resolveClaudeCompat(id: string): ClaudeCompat | undefined {
 }
 
 function resolveClaudeThinkingLevelMap(id: string): ProviderModelConfig["thinkingLevelMap"] | undefined {
+	if (!supportsClaudeThinking(id)) {
+		return undefined;
+	}
+
 	if (id === "claude-opus-4-7" || id === "claude-opus-4-8") {
 		return { xhigh: "xhigh" };
 	}
@@ -91,6 +96,10 @@ function resolveClaudeThinkingLevelMap(id: string): ProviderModelConfig["thinkin
 	return undefined;
 }
 
+function supportsClaudeThinking(id: string): boolean {
+	return !id.includes("haiku-4-");
+}
+
 export function createClaudeModelConfig(metadata: TheClawBayModelMetadata, name: string): ProviderModelConfig {
 	const thinkingLevelMap = resolveClaudeThinkingLevelMap(metadata.id);
 	const compat = resolveClaudeCompat(metadata.id);
@@ -98,9 +107,9 @@ export function createClaudeModelConfig(metadata: TheClawBayModelMetadata, name:
 	return {
 		id: metadata.id,
 		name,
-		api: "anthropic-messages",
+		api: THECLAWBAY_ANTHROPIC_API,
 		baseUrl: THECLAWBAY_CLAUDE_BASE_URL,
-		reasoning: true,
+		reasoning: supportsClaudeThinking(metadata.id),
 		...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 		input: [...MODEL_INPUTS],
 		cost: { ...(CLAUDE_KNOWN_COSTS[metadata.id] ?? ZERO_COST) },

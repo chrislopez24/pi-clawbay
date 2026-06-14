@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { streamSimpleGoogle } from '@earendil-works/pi-ai';
-import { streamSimpleAnthropic } from '@earendil-works/pi-ai/anthropic';
 import { streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/openai-completions';
+import { streamSimpleTheClawBayAnthropicMessages } from '../dist/anthropic-transport.js';
 import extension from '../dist/index.js';
 import { createGoogleModelConfig, isGoogleModelId } from '../dist/google-models.js';
 import { readCachedModelIds, readCachedModelMetadata } from '../dist/model-cache.js';
@@ -29,6 +29,7 @@ const originalImageMaxRetries = process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES;
 const originalFetch = globalThis.fetch;
 process.env.PI_CLAWBAY_CACHE_DIR = cacheDir;
 process.env.PI_CLAWBAY_IMAGE_DIR = imageDir;
+const THECLAWBAY_ANTHROPIC_API = 'theclawbay-anthropic-messages';
 
 const LIVE_MODEL_IDS = [
   'gpt-5.5',
@@ -171,7 +172,7 @@ try {
   const firstHandlers = {};
   const firstResult = await extension(createPi(firstRegistrations, {}, firstHandlers));
   assert.equal(firstResult, undefined, 'extension factory should resolve after startup discovery');
-  assert.equal(firstRegistrations.length, 1, 'provider should register once after startup discovery resolves');
+  assert.equal(firstRegistrations.length, 2, 'provider should register the visible provider and internal Anthropic transport');
   assert.equal(typeof firstHandlers.message_end, 'function', 'context overflow normalization should be registered');
   assert.deepEqual(registrationModelIds(firstRegistrations), LIVE_MODEL_IDS);
   assert.equal(
@@ -230,7 +231,7 @@ try {
   );
 
   const liveClaude = firstRegistrations[0].config.models.find((entry) => entry.id === 'claude-opus-4-8');
-  assert.equal(liveClaude?.api, 'anthropic-messages', 'Claude models should use Pi\'s native Anthropic Messages transport');
+  assert.equal(liveClaude?.api, THECLAWBAY_ANTHROPIC_API, 'Claude models should use TheClawBay Anthropic transport wrapper');
   assert.equal(liveClaude?.baseUrl, 'https://api.theclawbay.com/anthropic', 'Claude models should use TheClawBay\'s Anthropic-compatible base URL');
   assert.equal(liveClaude?.reasoning, true, 'Claude models should expose Pi Anthropic extended/adaptive thinking');
   assert.deepEqual(
@@ -247,6 +248,8 @@ try {
   assert.deepEqual(liveClaude?.thinkingLevelMap, { xhigh: 'xhigh' }, 'Opus 4.8 should expose native xhigh effort');
   assert.equal(liveClaude?.contextWindow, 1000000, 'new Claude 4.6+ models should use 1M context in Pi metadata');
   assert.equal(liveClaude?.maxTokens, 8192, 'Claude models should use a conservative Pi default max_tokens value');
+  const liveHaiku = firstRegistrations[0].config.models.find((entry) => entry.id === 'claude-haiku-4-5');
+  assert.equal(liveHaiku?.reasoning, false, 'TheClawBay Claude Haiku should not expose thinking controls that upstream rejects');
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
   assert.deepEqual(cache.modelIds, LIVE_MODEL_IDS);
@@ -457,7 +460,7 @@ try {
 
   const opus48 = buildOpenAIModels(['claude-opus-4-8'])[0];
   assert.equal(opus48.name, 'Claude Opus 4.8');
-  assert.equal(opus48.api, 'anthropic-messages');
+  assert.equal(opus48.api, THECLAWBAY_ANTHROPIC_API);
   assert.equal(opus48.baseUrl, 'https://api.theclawbay.com/anthropic');
   assert.deepEqual(opus48.compat, {
     supportsEagerToolInputStreaming: false,
@@ -480,31 +483,25 @@ try {
       [
         'event: message_start',
         'data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-opus-4-8","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0,"cache_read_input_tokens":6,"cache_creation_input_tokens":4}}}',
-        '',
         'event: content_block_start',
         'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-        '',
         'event: content_block_delta',
         'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK."}}',
-        '',
         'event: content_block_stop',
         'data: {"type":"content_block_stop","index":0}',
-        '',
         'event: message_delta',
         'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1,"cache_read_input_tokens":6,"cache_creation_input_tokens":4}}',
-        '',
         'event: message_stop',
         'data: {"type":"message_stop"}',
-        '',
       ].join('\n'),
       { status: 200, headers: { 'content-type': 'text/event-stream' } },
     );
   };
-  const anthropicStream = streamSimpleAnthropic(
+  const anthropicStream = streamSimpleTheClawBayAnthropicMessages(
     {
       ...opus48,
       provider: 'theclawbay',
-      api: 'anthropic-messages',
+      api: THECLAWBAY_ANTHROPIC_API,
       baseUrl: 'https://api.theclawbay.com/anthropic',
     },
     {
@@ -537,7 +534,8 @@ try {
   assert.equal('cache_control' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile tool cache_control');
   assert.equal(anthropicRequest.body.messages[0].content[0].cache_control.type, 'ephemeral', 'Claude conversation cache markers should be preserved');
   const anthropicDone = anthropicEvents.find((event) => event.type === 'done');
-  assert.ok(anthropicDone, 'Claude should stream through Pi Anthropic transport');
+  assert.ok(anthropicDone, 'Claude should stream through Pi Anthropic transport after TheClawBay SSE normalization');
+  assert.equal(anthropicDone.message.api, THECLAWBAY_ANTHROPIC_API);
   assert.equal(anthropicDone.message.usage.cacheRead, 6, 'Claude cache_read_input_tokens should be reported as cacheRead');
 
   globalThis.fetch = createDiscoveryFetch({ openai: [{ id: 'gpt-5.5' }], claude: [] });
@@ -547,7 +545,7 @@ try {
   stalePi.registerProvider = () => {
     throw new Error('stale pi');
   };
-  assert.equal(staleRegistrations.length, 1, 'stale extension refresh should not crash after initial registration');
+  assert.equal(staleRegistrations.length, 2, 'stale extension refresh should not crash after initial registration');
 
   globalThis.fetch = createDiscoveryFetch({ openai: MINI_OPENAI_MODEL_DATA, claude: [] });
   const refreshCommands = {};

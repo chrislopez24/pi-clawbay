@@ -10,6 +10,7 @@ export const THECLAWBAY_OPENAI_MODELS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_
 export const THECLAWBAY_CLAUDE_MODELS_URL = `${THECLAWBAY_CLAUDE_BASE_URL}/v1/models`;
 export const THECLAWBAY_IMAGES_GENERATIONS_URL = `${THECLAWBAY_OPENAI_DISCOVERY_BASE_URL}/images/generations`;
 export const THECLAWBAY_CODEX_API = "theclawbay-codex-responses";
+export const THECLAWBAY_ANTHROPIC_API = "theclawbay-anthropic-messages";
 export const THECLAWBAY_CHATGPT_ACCOUNT_ID = "theclawbay";
 export const THECLAWBAY_ANTHROPIC_VERSION_HEADER = "2023-06-01";
 
