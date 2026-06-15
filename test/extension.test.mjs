@@ -528,6 +528,7 @@ try {
   assert.equal(anthropicRequest.body.max_tokens, 8192, 'Claude requests should not reserve the upstream 64k/128k output limit by default');
   assert.equal(anthropicRequest.headers['x-session-affinity'], 'session-claude-cache', 'Claude requests should send session affinity for prompt-cache routing');
   assert.equal(anthropicRequest.body.thinking?.type, 'adaptive', 'Claude 4.8 should use adaptive thinking through Pi Anthropic compat');
+  assert.equal(anthropicRequest.body.thinking?.display, 'omitted', 'Claude adaptive thinking should skip unused summaries to reduce stuck-looking thinking latency');
   assert.deepEqual(anthropicRequest.body.output_config, { effort: 'high' });
   assert.equal('budget_tokens' in (anthropicRequest.body.thinking ?? {}), false, 'Claude 4.8 should not send legacy budget-based thinking');
   assert.equal('eager_input_streaming' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile eager_input_streaming');

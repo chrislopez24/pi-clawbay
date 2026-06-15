@@ -14,6 +14,7 @@ import type {
 
 const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
+const ADAPTIVE_THINKING_DISPLAY = "omitted";
 
 type Fetch = typeof fetch;
 type AnthropicCompat = {
@@ -198,6 +199,7 @@ function buildAnthropicOptions(model: Model<Api>, context: Context, options?: Si
 		return {
 			...shared,
 			thinkingEnabled: true,
+			thinkingDisplay: ADAPTIVE_THINKING_DISPLAY,
 			effort: resolveAnthropicEffort(model, options.reasoning),
 		};
 	}
