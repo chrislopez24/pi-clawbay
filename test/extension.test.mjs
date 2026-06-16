@@ -5,7 +5,10 @@ import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { streamSimpleGoogle } from '@earendil-works/pi-ai';
 import { streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/openai-completions';
-import { streamSimpleTheClawBayAnthropicMessages } from '../dist/anthropic-transport.js';
+import {
+  normalizeTheClawBayAnthropicSystemPrompt,
+  streamSimpleTheClawBayAnthropicMessages,
+} from '../dist/anthropic-transport.js';
 import extension from '../dist/index.js';
 import { createGoogleModelConfig, isGoogleModelId } from '../dist/google-models.js';
 import { readCachedModelIds, readCachedModelMetadata } from '../dist/model-cache.js';
@@ -30,6 +33,10 @@ const originalFetch = globalThis.fetch;
 process.env.PI_CLAWBAY_CACHE_DIR = cacheDir;
 process.env.PI_CLAWBAY_IMAGE_DIR = imageDir;
 const THECLAWBAY_ANTHROPIC_API = 'theclawbay-anthropic-messages';
+const PI_DOCS_HEADER =
+  'Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):';
+const PI_DOCS_LOOKUP_LINE =
+  '- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md)';
 
 const LIVE_MODEL_IDS = [
   'gpt-5.5',
@@ -514,6 +521,7 @@ try {
       baseUrl: 'https://api.theclawbay.com/anthropic',
     },
     {
+      systemPrompt: `${PI_DOCS_HEADER}\n${PI_DOCS_LOOKUP_LINE}`,
       messages: [{ role: 'user', content: 'Respond only OK.', timestamp: 0 }],
       tools: [
         {
@@ -546,6 +554,22 @@ try {
   assert.equal(anthropicRequest.body.thinking?.display, 'omitted', 'Claude adaptive thinking should skip unused summaries to reduce stuck-looking thinking latency');
   assert.deepEqual(anthropicRequest.body.output_config, { effort: 'high' });
   assert.equal('tool_choice' in anthropicRequest.body, false, 'TheClawBay Claude proxy should not receive forced tool_choice');
+  assert.equal(
+    anthropicRequest.body.system[0].text.includes(PI_DOCS_LOOKUP_LINE),
+    false,
+    'TheClawBay Claude requests should avoid the upstream-rejected single-line Pi docs lookup list',
+  );
+  assert.equal(
+    anthropicRequest.body.system[0].text.includes(PI_DOCS_HEADER),
+    false,
+    'TheClawBay Claude requests should avoid the upstream-sensitive Pi docs header wording',
+  );
+  assert.match(anthropicRequest.body.system[0].text, /Pi documentation paths and routing:/);
+  assert.match(anthropicRequest.body.system[0].text, /\n  - extensions: docs\/extensions\.md/);
+  assert.match(
+    normalizeTheClawBayAnthropicSystemPrompt(PI_DOCS_LOOKUP_LINE),
+    /\n  - pi packages: docs\/packages\.md/,
+  );
   assert.equal('budget_tokens' in (anthropicRequest.body.thinking ?? {}), false, 'Claude 4.8 should not send legacy budget-based thinking');
   assert.equal('eager_input_streaming' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile eager_input_streaming');
   assert.equal('cache_control' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile tool cache_control');

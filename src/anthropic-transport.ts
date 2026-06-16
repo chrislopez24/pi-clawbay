@@ -15,6 +15,22 @@ import type {
 const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 const ADAPTIVE_THINKING_DISPLAY = "omitted";
+const PI_DOCS_HEADER =
+	"Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):";
+const PI_DOCS_SAFE_HEADER = "Pi documentation paths and routing:";
+const PI_DOCS_LOOKUP_LINE =
+	"- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md)";
+const PI_DOCS_LOOKUP_LIST = `- When asked about:
+  - extensions: docs/extensions.md, examples/extensions/
+  - themes: docs/themes.md
+  - skills: docs/skills.md
+  - prompt templates: docs/prompt-templates.md
+  - TUI components: docs/tui.md
+  - keybindings: docs/keybindings.md
+  - SDK integrations: docs/sdk.md
+  - custom providers: docs/custom-provider.md
+  - adding models: docs/models.md
+  - pi packages: docs/packages.md`;
 
 type Fetch = typeof fetch;
 type AnthropicCompat = {
@@ -180,6 +196,19 @@ function buildAnthropicClient(model: Model<Api>, context: Context, options?: Sim
 	});
 }
 
+export function normalizeTheClawBayAnthropicSystemPrompt(systemPrompt: string | undefined): string | undefined {
+	return systemPrompt?.replace(PI_DOCS_HEADER, PI_DOCS_SAFE_HEADER).replace(PI_DOCS_LOOKUP_LINE, PI_DOCS_LOOKUP_LIST);
+}
+
+function createTheClawBayAnthropicContext(context: Context): Context {
+	const systemPrompt = normalizeTheClawBayAnthropicSystemPrompt(context.systemPrompt);
+	if (systemPrompt === context.systemPrompt) {
+		return context;
+	}
+
+	return { ...context, systemPrompt };
+}
+
 function stripProxyRejectedToolChoice(options?: SimpleStreamOptions): SimpleStreamOptions | undefined {
 	if (!options) {
 		return undefined;
@@ -232,5 +261,6 @@ export function streamSimpleTheClawBayAnthropicMessages(
 	context: Context,
 	options?: SimpleStreamOptions
 ): AssistantMessageEventStream {
-	return streamAnthropic(model as Model<"anthropic-messages">, context, buildAnthropicOptions(model, context, options));
+	const safeContext = createTheClawBayAnthropicContext(context);
+	return streamAnthropic(model as Model<"anthropic-messages">, safeContext, buildAnthropicOptions(model, safeContext, options));
 }
