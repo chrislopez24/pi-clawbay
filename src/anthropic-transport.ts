@@ -22,6 +22,7 @@ type AnthropicCompat = {
 	sendSessionAffinityHeaders?: boolean;
 	supportsEagerToolInputStreaming?: boolean;
 };
+type TheClawBayAnthropicOptions = SimpleStreamOptions & { toolChoice?: AnthropicOptions["toolChoice"] };
 
 function mergeHeaders(...sources: Array<Record<string, string> | undefined>): Record<string, string> {
 	return Object.assign({}, ...sources.filter(Boolean));
@@ -179,19 +180,29 @@ function buildAnthropicClient(model: Model<Api>, context: Context, options?: Sim
 	});
 }
 
+function stripProxyRejectedToolChoice(options?: SimpleStreamOptions): SimpleStreamOptions | undefined {
+	if (!options) {
+		return undefined;
+	}
+
+	const { toolChoice: _toolChoice, ...safeOptions } = options as TheClawBayAnthropicOptions;
+	return safeOptions;
+}
+
 function contextNeedsFineGrainedToolStreaming(model: Model<Api>, context: Context): boolean {
 	return !!context?.tools?.length && getAnthropicCompat(model).supportsEagerToolInputStreaming === false;
 }
 
 function buildAnthropicOptions(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AnthropicOptions {
-	const client = buildAnthropicClient(model, context, options);
+	const safeOptions = stripProxyRejectedToolChoice(options);
+	const client = buildAnthropicClient(model, context, safeOptions);
 	const shared = {
-		...options,
-		apiKey: options?.apiKey ?? process.env.THECLAWBAY_API_KEY,
+		...safeOptions,
+		apiKey: safeOptions?.apiKey ?? process.env.THECLAWBAY_API_KEY,
 		client,
 	};
 
-	if (!model.reasoning || !options?.reasoning) {
+	if (!model.reasoning || !safeOptions?.reasoning) {
 		return { ...shared, thinkingEnabled: false };
 	}
 
@@ -200,14 +211,19 @@ function buildAnthropicOptions(model: Model<Api>, context: Context, options?: Si
 			...shared,
 			thinkingEnabled: true,
 			thinkingDisplay: ADAPTIVE_THINKING_DISPLAY,
-			effort: resolveAnthropicEffort(model, options.reasoning),
+			effort: resolveAnthropicEffort(model, safeOptions.reasoning),
 		};
 	}
 
 	return {
 		...shared,
 		thinkingEnabled: true,
-		...adjustMaxTokensForThinking(options.maxTokens, model.maxTokens, options.reasoning, options.thinkingBudgets),
+		...adjustMaxTokensForThinking(
+			safeOptions.maxTokens,
+			model.maxTokens,
+			safeOptions.reasoning,
+			safeOptions.thinkingBudgets
+		),
 	};
 }
 

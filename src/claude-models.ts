@@ -89,7 +89,7 @@ function resolveClaudeThinkingLevelMap(id: string): ProviderModelConfig["thinkin
 		return { xhigh: "xhigh" };
 	}
 
-	if (id === "claude-opus-4-6") {
+	if (id === "claude-opus-4-6" || id === "claude-sonnet-4-6") {
 		return { xhigh: "max" };
 	}
 

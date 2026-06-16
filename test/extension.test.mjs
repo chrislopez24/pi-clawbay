@@ -247,9 +247,13 @@ try {
   );
   assert.deepEqual(liveClaude?.thinkingLevelMap, { xhigh: 'xhigh' }, 'Opus 4.8 should expose native xhigh effort');
   assert.equal(liveClaude?.contextWindow, 1000000, 'new Claude 4.6+ models should use 1M context in Pi metadata');
-  assert.equal(liveClaude?.maxTokens, 8192, 'Claude models should use a conservative Pi default max_tokens value');
+  assert.equal(liveClaude?.maxTokens, 128000, 'Claude Opus should use the current upstream output limit for xhigh/max efforts');
+  const liveSonnet = firstRegistrations[0].config.models.find((entry) => entry.id === 'claude-sonnet-4-6');
+  assert.deepEqual(liveSonnet?.thinkingLevelMap, { xhigh: 'max' }, 'Sonnet 4.6 should map Pi xhigh to Anthropic max effort');
+  assert.equal(liveSonnet?.maxTokens, 64000, 'Claude Sonnet should use the current upstream output limit for max effort');
   const liveHaiku = firstRegistrations[0].config.models.find((entry) => entry.id === 'claude-haiku-4-5');
   assert.equal(liveHaiku?.reasoning, false, 'TheClawBay Claude Haiku should not expose thinking controls that upstream rejects');
+  assert.equal(liveHaiku?.maxTokens, 64000, 'Claude Haiku should use the current upstream output limit');
 
   const cache = JSON.parse(readFileSync(join(cacheDir, 'models.json'), 'utf8'));
   assert.deepEqual(cache.modelIds, LIVE_MODEL_IDS);
@@ -470,6 +474,11 @@ try {
     supportsTemperature: false,
   });
   assert.deepEqual(opus48.thinkingLevelMap, { xhigh: 'xhigh' });
+  assert.equal(opus48.maxTokens, 128000);
+
+  const sonnet46 = buildOpenAIModels(['claude-sonnet-4-6'])[0];
+  assert.deepEqual(sonnet46.thinkingLevelMap, { xhigh: 'max' });
+  assert.equal(sonnet46.maxTokens, 64000);
 
   let anthropicRequest;
   globalThis.fetch = async (url, init) => {
@@ -518,18 +527,25 @@ try {
         },
       ],
     },
-    { apiKey: 'test-key', reasoning: 'high', sessionId: 'session-claude-cache', cacheRetention: 'short' },
+    {
+      apiKey: 'test-key',
+      reasoning: 'high',
+      sessionId: 'session-claude-cache',
+      cacheRetention: 'short',
+      toolChoice: { type: 'tool', name: 'read' },
+    },
   );
   const anthropicEvents = [];
   for await (const event of anthropicStream) {
     anthropicEvents.push(event);
   }
   assert.equal(anthropicRequest.url, 'https://api.theclawbay.com/anthropic/v1/messages');
-  assert.equal(anthropicRequest.body.max_tokens, 8192, 'Claude requests should not reserve the upstream 64k/128k output limit by default');
+  assert.equal(anthropicRequest.body.max_tokens, 128000, 'Claude requests should allow the current Opus output limit for xhigh/max-capable turns');
   assert.equal(anthropicRequest.headers['x-session-affinity'], 'session-claude-cache', 'Claude requests should send session affinity for prompt-cache routing');
   assert.equal(anthropicRequest.body.thinking?.type, 'adaptive', 'Claude 4.8 should use adaptive thinking through Pi Anthropic compat');
   assert.equal(anthropicRequest.body.thinking?.display, 'omitted', 'Claude adaptive thinking should skip unused summaries to reduce stuck-looking thinking latency');
   assert.deepEqual(anthropicRequest.body.output_config, { effort: 'high' });
+  assert.equal('tool_choice' in anthropicRequest.body, false, 'TheClawBay Claude proxy should not receive forced tool_choice');
   assert.equal('budget_tokens' in (anthropicRequest.body.thinking ?? {}), false, 'Claude 4.8 should not send legacy budget-based thinking');
   assert.equal('eager_input_streaming' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile eager_input_streaming');
   assert.equal('cache_control' in anthropicRequest.body.tools[0], false, 'Claude tools should avoid proxy-hostile tool cache_control');

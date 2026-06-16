@@ -168,7 +168,7 @@ Why split it?
 - `gpt-5.4` is configured with a `272,000` token context window.
 - `gpt-5.4[1m]` is configured with a `1,050,000` token context window.
 - Current non-5.4 GPT-5/Codex variants default to `272,000` context and `128,000` max output tokens.
-- Current Claude 4.6+ variants default to `1,000,000` context in Pi metadata and a conservative `8,192` Pi `max_tokens` request cap. Anthropic advertises higher output ceilings, but using those as the default causes every short Pi turn to reserve a very large output budget through TheClawBay.
+- Current Claude 4.6+ variants default to `1,000,000` context in Pi metadata. Opus uses `128,000` max output tokens, while Sonnet and Haiku use `64,000`, matching the current Claude output ceilings needed by adaptive `xhigh`/`max` efforts.
 - Gemini variants discovered from `/v1/models` use Pi's Google transport with `1,048,576` context and `65,536` max output tokens.
 - Open-weight variants preserve `context_window` from live discovery and default to `128,000` max output metadata.
 - `gpt-image-2` uses the direct `/v1/images/generations` path with `1024x1024` PNG output, `272,000` context metadata, and `65,536` max output metadata.
@@ -348,8 +348,8 @@ PI_CLAWBAY_IMAGE_DIR=/tmp/pi-clawbay-images pi --no-extensions -e /path/to/pi-cl
 - DeepSeek intermittently returns `400 "The \`reasoning_content\` in the thinking mode must be passed back to the API."`: upgrade/reload this extension and refresh models. `deepseek-*` models must use Pi's `openai-completions` DeepSeek compatibility path, not the Codex Responses serializer.
 - Claude model returns an OpenAI/Codex-route error: upgrade/reload this extension and refresh models. `claude-*` models must use the extension's `theclawbay-anthropic-messages` wrapper and TheClawBay `/anthropic`, not `backend-api/codex/responses`.
 - Claude stream parsing fails around `message_stop` or contains concatenated `event:`/`data:` lines: upgrade/reload this extension. The TheClawBay Anthropic wrapper normalizes those SSE chunks before Pi's official parser consumes them.
-- Claude model returns `400 upstream_rejected` with binary-looking escaped content: first confirm the registered Claude model is using Pi `0.79.3+`, the extension's TheClawBay Anthropic wrapper, and the conservative `8,192` default `max_tokens`. Opus/Sonnet aliases need adaptive thinking, while Haiku must not receive thinking parameters.
-- Claude tool requests fail but no-tool prompts work: verify the registered model compat still has `supportsEagerToolInputStreaming: false` and `supportsCacheControlOnTools: false`.
+- Claude model returns `400 upstream_rejected` with binary-looking escaped content: first confirm the registered Claude model is using Pi `0.79.3+`, the extension's TheClawBay Anthropic wrapper, and current Claude output ceilings. Opus/Sonnet aliases need adaptive thinking, while Haiku must not receive thinking parameters.
+- Claude tool requests fail but no-tool prompts work: verify the registered model compat still has `supportsEagerToolInputStreaming: false` and `supportsCacheControlOnTools: false`; the wrapper also strips forced `tool_choice` because TheClawBay's Claude proxy rejects it.
 - Gemini model returns `404 upstream returned HTTP 404` on a Codex route: upgrade/reload this extension. `gemini-*` models must use Pi's `google-generative-ai` transport and TheClawBay `/v1beta`, not `backend-api/codex/responses`.
 - Gemini cache is not showing Codex-style cache hits: expected for now. TheClawBay currently blocks `v1beta/cachedContents`; Pi will still report `cachedContentTokenCount` as `cacheRead` if the upstream route returns it.
 - GPT/Codex cache behavior regresses: verify the request still uses `/v1/responses`, includes `prompt_cache_key`, and sends `session-id` plus legacy `session_id` when Pi has a session id.
