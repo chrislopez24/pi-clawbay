@@ -16,6 +16,7 @@ const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 const ADAPTIVE_THINKING_DISPLAY = "omitted";
 const DEFAULT_ANTHROPIC_TIMEOUT_MS = 180_000;
+const PI_DISABLED_TIMEOUT_MS = 2_147_483_647;
 const PI_DOCS_HEADER =
 	"Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):";
 const PI_DOCS_SAFE_HEADER = "Pi documentation paths and routing:";
@@ -168,12 +169,21 @@ function resolveAnthropicEffort(model: Model<Api>, level: SimpleStreamOptions["r
 	}
 }
 
-function resolveAnthropicTimeoutMs(): number {
+function resolveAnthropicTimeoutCapMs(): number {
 	const raw = process.env.PI_CLAWBAY_ANTHROPIC_TIMEOUT_MS;
 	if (!raw) return DEFAULT_ANTHROPIC_TIMEOUT_MS;
 
 	const timeout = Number.parseInt(raw, 10);
 	return Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_ANTHROPIC_TIMEOUT_MS;
+}
+
+function resolveAnthropicTimeoutMs(requestedTimeoutMs: number | undefined): number {
+	const timeoutCapMs = resolveAnthropicTimeoutCapMs();
+	if (!requestedTimeoutMs || !Number.isFinite(requestedTimeoutMs) || requestedTimeoutMs >= PI_DISABLED_TIMEOUT_MS) {
+		return timeoutCapMs;
+	}
+
+	return Math.min(requestedTimeoutMs, timeoutCapMs);
 }
 
 function adjustMaxTokensForThinking(
@@ -256,7 +266,7 @@ function contextNeedsFineGrainedToolStreaming(model: Model<Api>, context: Contex
 
 function buildAnthropicOptions(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AnthropicOptions {
 	const safeOptions = stripProxyRejectedToolChoice(options);
-	const timeoutMs = safeOptions?.timeoutMs ?? resolveAnthropicTimeoutMs();
+	const timeoutMs = resolveAnthropicTimeoutMs(safeOptions?.timeoutMs);
 	const timeoutOptions = { ...safeOptions, timeoutMs };
 	const client = buildAnthropicClient(model, context, timeoutOptions);
 	const shared = {

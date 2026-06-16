@@ -582,6 +582,45 @@ try {
   assert.equal(anthropicDone.message.api, THECLAWBAY_ANTHROPIC_API);
   assert.equal(anthropicDone.message.usage.cacheRead, 6, 'Claude cache_read_input_tokens should be reported as cacheRead');
 
+  let cappedAnthropicRequest;
+  globalThis.fetch = async (url, init) => {
+    cappedAnthropicRequest = {
+      url: String(url),
+      headers: Object.fromEntries(new Headers(init.headers).entries()),
+    };
+
+    return new Response(
+      [
+        'event: message_start',
+        'data: {"type":"message_start","message":{"id":"msg_timeout_cap","type":"message","role":"assistant","content":[],"model":"claude-opus-4-8","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}',
+        'event: message_delta',
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}',
+        'event: message_stop',
+        'data: {"type":"message_stop"}',
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  };
+  const cappedAnthropicStream = streamSimpleTheClawBayAnthropicMessages(
+    {
+      ...opus48,
+      provider: 'theclawbay',
+      api: THECLAWBAY_ANTHROPIC_API,
+      baseUrl: 'https://api.theclawbay.com/anthropic',
+    },
+    { messages: [{ role: 'user', content: 'Respond only OK.', timestamp: 0 }] },
+    { apiKey: 'test-key', reasoning: 'high', timeoutMs: 300000 },
+  );
+  for await (const _event of cappedAnthropicStream) {
+    // Drain the stream so the request is made and normalized.
+  }
+  assert.equal(cappedAnthropicRequest.url, 'https://api.theclawbay.com/anthropic/v1/messages');
+  assert.equal(
+    cappedAnthropicRequest.headers['x-stainless-timeout'],
+    '180',
+    'Claude requests should cap Pi default 300s timeout to TheClawBay Anthropic idle timeout',
+  );
+
   globalThis.fetch = async () =>
     new Response(new ReadableStream({ pull() { return new Promise(() => {}); } }), {
       status: 200,
