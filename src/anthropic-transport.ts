@@ -15,6 +15,7 @@ import type {
 const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 const ADAPTIVE_THINKING_DISPLAY = "omitted";
+const DEFAULT_ANTHROPIC_TIMEOUT_MS = 180_000;
 const PI_DOCS_HEADER =
 	"Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):";
 const PI_DOCS_SAFE_HEADER = "Pi documentation paths and routing:";
@@ -49,7 +50,30 @@ function shouldNormalizeAnthropicSse(response: Response): boolean {
 	return !!response.body && contentType.toLowerCase().includes("text/event-stream");
 }
 
-function createNormalizedSseStream(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+async function readWithIdleTimeout(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	timeoutMs: number | undefined
+) {
+	if (!timeoutMs) return reader.read();
+
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			reader.read(),
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(() => {
+					const error = new Error(`TheClawBay Anthropic stream timed out after ${timeoutMs}ms without data`);
+					reject(error);
+					void reader.cancel(error);
+				}, timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
+}
+
+function createNormalizedSseStream(body: ReadableStream<Uint8Array>, idleTimeoutMs?: number): ReadableStream<Uint8Array> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	const encoder = new TextEncoder();
@@ -88,7 +112,7 @@ function createNormalizedSseStream(body: ReadableStream<Uint8Array>): ReadableSt
 
 	return new ReadableStream<Uint8Array>({
 		async pull(controller) {
-			const { value, done } = await reader.read();
+			const { value, done } = await readWithIdleTimeout(reader, idleTimeoutMs);
 			if (done) {
 				const output = drainLines(true);
 				if (output) controller.enqueue(encoder.encode(output));
@@ -107,13 +131,13 @@ function createNormalizedSseStream(body: ReadableStream<Uint8Array>): ReadableSt
 	});
 }
 
-export function normalizeAnthropicSseResponse(response: Response): Response {
+export function normalizeAnthropicSseResponse(response: Response, idleTimeoutMs?: number): Response {
 	const body = response.body;
 	if (!body || !shouldNormalizeAnthropicSse(response)) {
 		return response;
 	}
 
-	return new Response(createNormalizedSseStream(body), {
+	return new Response(createNormalizedSseStream(body, idleTimeoutMs), {
 		status: response.status,
 		statusText: response.statusText,
 		headers: response.headers,
@@ -124,8 +148,8 @@ function getAnthropicCompat(model: Model<Api>): AnthropicCompat {
 	return (model.compat ?? {}) as AnthropicCompat;
 }
 
-function createNormalizingFetch(sourceFetch: Fetch = globalThis.fetch): Fetch {
-	return async (input, init) => normalizeAnthropicSseResponse(await sourceFetch(input, init));
+function createNormalizingFetch(sourceFetch: Fetch = globalThis.fetch, idleTimeoutMs?: number): Fetch {
+	return async (input, init) => normalizeAnthropicSseResponse(await sourceFetch(input, init), idleTimeoutMs);
 }
 
 function resolveAnthropicEffort(model: Model<Api>, level: SimpleStreamOptions["reasoning"]): AnthropicEffort {
@@ -142,6 +166,14 @@ function resolveAnthropicEffort(model: Model<Api>, level: SimpleStreamOptions["r
 		default:
 			return "high";
 	}
+}
+
+function resolveAnthropicTimeoutMs(): number {
+	const raw = process.env.PI_CLAWBAY_ANTHROPIC_TIMEOUT_MS;
+	if (!raw) return DEFAULT_ANTHROPIC_TIMEOUT_MS;
+
+	const timeout = Number.parseInt(raw, 10);
+	return Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_ANTHROPIC_TIMEOUT_MS;
 }
 
 function adjustMaxTokensForThinking(
@@ -182,7 +214,7 @@ function buildAnthropicClient(model: Model<Api>, context: Context, options?: Sim
 		authToken: null,
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,
-		fetch: createNormalizingFetch(),
+		fetch: createNormalizingFetch(globalThis.fetch, options?.timeoutMs),
 		defaultHeaders: mergeHeaders(
 			{
 				accept: "application/json",
@@ -224,9 +256,11 @@ function contextNeedsFineGrainedToolStreaming(model: Model<Api>, context: Contex
 
 function buildAnthropicOptions(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AnthropicOptions {
 	const safeOptions = stripProxyRejectedToolChoice(options);
-	const client = buildAnthropicClient(model, context, safeOptions);
+	const timeoutMs = safeOptions?.timeoutMs ?? resolveAnthropicTimeoutMs();
+	const timeoutOptions = { ...safeOptions, timeoutMs };
+	const client = buildAnthropicClient(model, context, timeoutOptions);
 	const shared = {
-		...safeOptions,
+		...timeoutOptions,
 		apiKey: safeOptions?.apiKey ?? process.env.THECLAWBAY_API_KEY,
 		client,
 	};

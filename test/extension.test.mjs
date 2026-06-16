@@ -29,9 +29,11 @@ const originalApiKey = process.env.THECLAWBAY_API_KEY;
 const originalCacheDir = process.env.PI_CLAWBAY_CACHE_DIR;
 const originalImageDir = process.env.PI_CLAWBAY_IMAGE_DIR;
 const originalImageMaxRetries = process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES;
+const originalAnthropicTimeout = process.env.PI_CLAWBAY_ANTHROPIC_TIMEOUT_MS;
 const originalFetch = globalThis.fetch;
 process.env.PI_CLAWBAY_CACHE_DIR = cacheDir;
 process.env.PI_CLAWBAY_IMAGE_DIR = imageDir;
+delete process.env.PI_CLAWBAY_ANTHROPIC_TIMEOUT_MS;
 const THECLAWBAY_ANTHROPIC_API = 'theclawbay-anthropic-messages';
 const PI_DOCS_HEADER =
   'Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):';
@@ -548,6 +550,7 @@ try {
     anthropicEvents.push(event);
   }
   assert.equal(anthropicRequest.url, 'https://api.theclawbay.com/anthropic/v1/messages');
+  assert.equal(anthropicRequest.headers['x-stainless-timeout'], '180', 'Claude requests should not hang indefinitely when Pi does not pass timeoutMs');
   assert.equal(anthropicRequest.body.max_tokens, 128000, 'Claude requests should allow the current Opus output limit for xhigh/max-capable turns');
   assert.equal(anthropicRequest.headers['x-session-affinity'], 'session-claude-cache', 'Claude requests should send session affinity for prompt-cache routing');
   assert.equal(anthropicRequest.body.thinking?.type, 'adaptive', 'Claude 4.8 should use adaptive thinking through Pi Anthropic compat');
@@ -578,6 +581,32 @@ try {
   assert.ok(anthropicDone, 'Claude should stream through Pi Anthropic transport after TheClawBay SSE normalization');
   assert.equal(anthropicDone.message.api, THECLAWBAY_ANTHROPIC_API);
   assert.equal(anthropicDone.message.usage.cacheRead, 6, 'Claude cache_read_input_tokens should be reported as cacheRead');
+
+  globalThis.fetch = async () =>
+    new Response(new ReadableStream({ pull() { return new Promise(() => {}); } }), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  const idleAnthropicStream = streamSimpleTheClawBayAnthropicMessages(
+    {
+      ...opus48,
+      provider: 'theclawbay',
+      api: THECLAWBAY_ANTHROPIC_API,
+      baseUrl: 'https://api.theclawbay.com/anthropic',
+    },
+    { messages: [{ role: 'user', content: 'Respond only OK.', timestamp: 0 }] },
+    { apiKey: 'test-key', reasoning: 'high', timeoutMs: 5 },
+  );
+  const idleAnthropicEvents = [];
+  for await (const event of idleAnthropicStream) {
+    idleAnthropicEvents.push(event);
+  }
+  const idleAnthropicError = idleAnthropicEvents.find((event) => event.type === 'error');
+  assert.match(
+    idleAnthropicError?.error?.errorMessage,
+    /TheClawBay Anthropic stream timed out after 5ms without data/,
+    'Claude streams should fail visibly when an SSE response goes idle',
+  );
 
   globalThis.fetch = createDiscoveryFetch({ openai: [{ id: 'gpt-5.5' }], claude: [] });
   const staleRegistrations = [];
@@ -1197,6 +1226,12 @@ try {
     delete process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES;
   } else {
     process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES = originalImageMaxRetries;
+  }
+
+  if (originalAnthropicTimeout === undefined) {
+    delete process.env.PI_CLAWBAY_ANTHROPIC_TIMEOUT_MS;
+  } else {
+    process.env.PI_CLAWBAY_ANTHROPIC_TIMEOUT_MS = originalAnthropicTimeout;
   }
 
   globalThis.fetch = originalFetch;
