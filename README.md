@@ -74,7 +74,7 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
   - `https://api.theclawbay.com/v1`
   - Pi's `openai-completions` transport is used because it supports DeepSeek thinking controls and replays assistant `reasoning_content` fields on follow-up turns.
   - This avoids intermittent thinking-mode failures such as `400 "The \`reasoning_content\` in the thinking mode must be passed back to the API."`
-- **Cache-verified open-weight models** currently include `glm-5.1`, `kimi-k2.6`, `kimi-k2.7-code`, and `mimo-v2.5-pro`; they use TheClawBay's OpenAI-compatible chat-completions route:
+- **Cache-verified open-weight models** currently include `glm-5.2`, `glm-5.1`, `kimi-k2.6`, `kimi-k2.7-code`, and `mimo-v2.5-pro`; they use TheClawBay's OpenAI-compatible chat-completions route:
   - `https://api.theclawbay.com/v1`
   - Pi's `openai-completions` transport sends `stream_options.include_usage`, `store: false`, and `max_completion_tokens`.
   - The model compat enables Anthropic-style `cache_control` markers plus `session_id`, `x-client-request-id`, and `x-session-affinity` headers. Live smoke testing confirmed cache hits through `prompt_tokens_details.cached_tokens` on repeated `kimi-k2.7-code` requests.
@@ -131,7 +131,7 @@ The Codex cache behavior must not be degraded: GPT/Codex models should continue 
 
 As of 2026-06-13, live testing against `POST https://api.theclawbay.com/v1/chat/completions` with repeated large prompts, `cache_control`, and session-affinity headers showed:
 
-- Cache hits confirmed through `prompt_tokens_details.cached_tokens`: `glm-5.1`, `kimi-k2.6`, `kimi-k2.7-code`, `mimo-v2.5-pro`.
+- Cache hits confirmed through `prompt_tokens_details.cached_tokens`: `glm-5.2`, `glm-5.1`, `kimi-k2.6`, `kimi-k2.7-code`, `mimo-v2.5-pro`.
 - Responded but did not report cache hits after repeated attempts, even with `prompt_cache_key` and long-retention fields: `gemma-4-31b-it`, `qwen3.5-397b-a17b`, `qwen3.6-27b`.
 - Temporarily unavailable upstream during verification: `glm-4.7`, `glm-4.7-flash`, `glm-5`, `kimi-k2.5`, `kimi-k2.5-lightning`, `minimax-m2.5`, `qwen3.5-9b`.
 
@@ -193,7 +193,7 @@ Current fallback list in this package, used only when live discovery and cache a
 - `gpt-5.1-codex-max`
 - `gpt-5.1-codex-mini`
 
-Live discovery may add newer GPT/Codex, Claude, Gemini, DeepSeek, and cache-verified open-weight models such as `gemini-2.5-pro`, `gemini-3.1-pro-preview`, `kimi-k2.7-code`, `kimi-k2.6`, `glm-5.1`, or `mimo-v2.5-pro` when TheClawBay exposes them for your account.
+Live discovery may add newer GPT/Codex, Claude, Gemini, DeepSeek, and cache-verified open-weight models such as `gemini-2.5-pro`, `gemini-3.1-pro-preview`, `kimi-k2.7-code`, `kimi-k2.6`, `glm-5.2`, `glm-5.1`, or `mimo-v2.5-pro` when TheClawBay exposes them for your account.
 
 `gpt-image-2` is exposed because TheClawBay's latest docs list it as the direct image-generation model for `POST /v1/images/generations`. Other native image-generation models returned by discovery, such as `gpt-image-1.5`, remain hidden until this extension has a dedicated, tested flow for them.
 
@@ -211,6 +211,7 @@ Use `/model` command in pi:
 /model theclawbay/claude-sonnet-4-6
 /model theclawbay/gemini-3-flash-preview
 /model theclawbay/kimi-k2.7-code
+/model theclawbay/glm-5.2
 /model theclawbay/glm-5.1
 /model theclawbay/gpt-image-2
 ```
@@ -258,7 +259,7 @@ export default async function (pi: ExtensionAPI) {
 |--------------|------------------|----------|
 | `theclawbay/gpt-*`, `theclawbay/*codex*` | `https://api.theclawbay.com/v1` | Custom Responses transport wrapper (`theclawbay-codex-responses`) |
 | `theclawbay/deepseek-*` | `https://api.theclawbay.com/v1/chat/completions` | Pi `openai-completions` transport with DeepSeek compat |
-| `theclawbay/glm-5.1`, `theclawbay/kimi-k2.6`, `theclawbay/kimi-k2.7-code`, `theclawbay/mimo-v2.5-pro` | `https://api.theclawbay.com/v1/chat/completions` | Pi `openai-completions` transport with cache-control compat |
+| `theclawbay/glm-5.2`, `theclawbay/glm-5.1`, `theclawbay/kimi-k2.6`, `theclawbay/kimi-k2.7-code`, `theclawbay/mimo-v2.5-pro` | `https://api.theclawbay.com/v1/chat/completions` | Pi `openai-completions` transport with cache-control compat |
 | `theclawbay/claude-*` | `https://api.theclawbay.com/anthropic/v1/messages` | TheClawBay SSE normalizer over Pi `anthropic-messages` |
 | `theclawbay/gemini-*` | `https://api.theclawbay.com/v1beta` | Pi `google-generative-ai` transport |
 | `theclawbay/gpt-image-2` | `https://api.theclawbay.com/v1/images/generations` | Direct OpenAI-compatible Images API |

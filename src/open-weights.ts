@@ -5,7 +5,7 @@ import type { TheClawBayModelMetadata } from "./types.js";
 type ModelCompat = NonNullable<ProviderModelConfig["compat"]>;
 
 const OPEN_WEIGHT_MODEL_ID_PATTERNS = [/^gemma[-.]/i, /^glm[-.]/i, /^kimi[-.]/i, /^mimo[-.]/i, /^minimax[-.]/i, /^qwen/i] as const;
-const CACHE_VERIFIED_OPEN_WEIGHT_MODEL_IDS = new Set(["glm-5.1", "kimi-k2.6", "kimi-k2.7-code", "mimo-v2.5-pro"]);
+const CACHE_VERIFIED_OPEN_WEIGHT_MODEL_IDS = new Set(["glm-5.2", "glm-5.1", "kimi-k2.6", "kimi-k2.7-code", "mimo-v2.5-pro"]);
 
 const OPEN_WEIGHT_COMPAT: ModelCompat = {
 	cacheControlFormat: "anthropic",
