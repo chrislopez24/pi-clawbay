@@ -3,13 +3,23 @@ import { OPENAI_DEFAULT_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS, THECLAWBAY_OP
 import type { TheClawBayModelMetadata } from "./types.js";
 
 type ModelCompat = NonNullable<ProviderModelConfig["compat"]>;
+type ThinkingLevelMap = NonNullable<ProviderModelConfig["thinkingLevelMap"]>;
 
 const OPEN_WEIGHT_MODEL_ID_PATTERNS = [/^gemma[-.]/i, /^glm[-.]/i, /^kimi[-.]/i, /^mimo[-.]/i, /^minimax[-.]/i, /^qwen/i] as const;
 const CACHE_VERIFIED_OPEN_WEIGHT_MODEL_IDS = new Set(["glm-5.2", "glm-5.1", "kimi-k2.6", "kimi-k2.7-code", "mimo-v2.5-pro"]);
+const REASONING_OPEN_WEIGHT_MODEL_IDS = new Set(["glm-5.2"]);
 
 const OPEN_WEIGHT_COMPAT: ModelCompat = {
 	cacheControlFormat: "anthropic",
 	sendSessionAffinityHeaders: true,
+};
+
+const GLM_THINKING_LEVEL_MAP: ThinkingLevelMap = {
+	minimal: null,
+	low: null,
+	medium: null,
+	high: "high",
+	xhigh: "max",
 };
 
 export function isOpenWeightModelId(id: string): boolean {
@@ -18,6 +28,10 @@ export function isOpenWeightModelId(id: string): boolean {
 
 export function isCacheVerifiedOpenWeightModelId(id: string): boolean {
 	return CACHE_VERIFIED_OPEN_WEIGHT_MODEL_IDS.has(id);
+}
+
+function isReasoningOpenWeightModelId(id: string): boolean {
+	return REASONING_OPEN_WEIGHT_MODEL_IDS.has(id);
 }
 
 export function formatOpenWeightModelName(id: string, formatPart: (part: string) => string): string {
@@ -49,12 +63,15 @@ export function createOpenWeightModelConfig(
 	name: string,
 	cost: ProviderModelConfig["cost"]
 ): ProviderModelConfig {
+	const reasoning = isReasoningOpenWeightModelId(metadata.id);
+
 	return {
 		id: metadata.id,
 		name,
 		api: "openai-completions",
 		baseUrl: THECLAWBAY_OPENAI_DISCOVERY_BASE_URL,
-		reasoning: false,
+		reasoning,
+		...(reasoning ? { thinkingLevelMap: { ...GLM_THINKING_LEVEL_MAP } } : {}),
 		input: ["text", "image"],
 		cost: { ...cost },
 		contextWindow: metadata.contextWindow ?? OPENAI_DEFAULT_CONTEXT_WINDOW,

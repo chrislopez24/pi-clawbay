@@ -78,6 +78,7 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
   - `https://api.theclawbay.com/v1`
   - Pi's `openai-completions` transport sends `stream_options.include_usage`, `store: false`, and `max_completion_tokens`.
   - The model compat enables Anthropic-style `cache_control` markers plus `session_id`, `x-client-request-id`, and `x-session-affinity` headers. Live smoke testing confirmed cache hits through `prompt_tokens_details.cached_tokens` on repeated `kimi-k2.7-code` requests.
+  - `glm-5.2` exposes Pi reasoning controls with `high -> high` and `xhigh -> max`, matching the efforts accepted by TheClawBay's chat-completions route.
   - Discovered open-weight IDs that respond without cache hits, or are temporarily unavailable upstream, remain hidden until they can be verified with real `cached_tokens` usage.
 - **Claude models** (`claude-*`) are registered per model with:
   - `api: "theclawbay-anthropic-messages"`
@@ -132,6 +133,7 @@ The Codex cache behavior must not be degraded: GPT/Codex models should continue 
 As of 2026-06-13, live testing against `POST https://api.theclawbay.com/v1/chat/completions` with repeated large prompts, `cache_control`, and session-affinity headers showed:
 
 - Cache hits confirmed through `prompt_tokens_details.cached_tokens`: `glm-5.2`, `glm-5.1`, `kimi-k2.6`, `kimi-k2.7-code`, `mimo-v2.5-pro`.
+- Reasoning confirmed for `glm-5.2`: TheClawBay accepts `reasoning_effort` values `high` and `max` and returns `reasoning_content` plus `reasoning_tokens`, even though current discovery metadata reports `supports_reasoning: false`.
 - Responded but did not report cache hits after repeated attempts, even with `prompt_cache_key` and long-retention fields: `gemma-4-31b-it`, `qwen3.5-397b-a17b`, `qwen3.6-27b`.
 - Temporarily unavailable upstream during verification: `glm-4.7`, `glm-4.7-flash`, `glm-5`, `kimi-k2.5`, `kimi-k2.5-lightning`, `minimax-m2.5`, `qwen3.5-9b`.
 

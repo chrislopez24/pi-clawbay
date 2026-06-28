@@ -222,6 +222,14 @@ try {
     { cacheControlFormat: 'anthropic', sendSessionAffinityHeaders: true },
     'open-weight models should request cache-control markers and session-affinity headers for prompt-cache hits',
   );
+  const liveGlm52 = firstRegistrations[0].config.models.find((entry) => entry.id === 'glm-5.2');
+  assert.equal(liveGlm52?.api, 'openai-completions', 'GLM 5.2 should use Pi OpenAI chat completions compatibility');
+  assert.equal(liveGlm52?.reasoning, true, 'GLM 5.2 should expose Pi reasoning controls despite incomplete discovery metadata');
+  assert.deepEqual(
+    liveGlm52?.thinkingLevelMap,
+    { minimal: null, low: null, medium: null, high: 'high', xhigh: 'max' },
+    'GLM 5.2 should expose the reasoning efforts accepted by TheClawBay',
+  );
   const liveDeepSeek = firstRegistrations[0].config.models.find((entry) => entry.id === 'deepseek-v4-flash');
   assert.equal(liveDeepSeek?.api, 'openai-completions', 'DeepSeek models should use Pi OpenAI chat completions compatibility');
   assert.equal(liveDeepSeek?.baseUrl, 'https://api.theclawbay.com/v1', 'DeepSeek models should use TheClawBay OpenAI-compatible base URL');
@@ -400,6 +408,14 @@ try {
   assert.equal(openWeightModel.maxTokens, 128000);
   assert.deepEqual(openWeightModel.compat, { cacheControlFormat: 'anthropic', sendSessionAffinityHeaders: true });
 
+  const glm52Model = buildOpenAIModels([{ id: 'glm-5.2', contextWindow: 1000000, supportsReasoning: false }])[0];
+  assert.equal(glm52Model.name, 'GLM 5.2');
+  assert.equal(glm52Model.api, 'openai-completions');
+  assert.equal(glm52Model.reasoning, true);
+  assert.equal(glm52Model.contextWindow, 1000000);
+  assert.deepEqual(glm52Model.thinkingLevelMap, { minimal: null, low: null, medium: null, high: 'high', xhigh: 'max' });
+  assert.deepEqual(glm52Model.compat, { cacheControlFormat: 'anthropic', sendSessionAffinityHeaders: true });
+
   let openWeightRequest;
   globalThis.fetch = async (url, init) => {
     openWeightRequest = {
@@ -466,6 +482,48 @@ try {
   assert.equal(openWeightDone.message.api, 'openai-completions');
   assert.equal(openWeightDone.message.model, 'kimi-k2.7-code');
   assert.equal(openWeightDone.message.usage.cacheRead, 64, 'open-weight cached_tokens usage should be reported as cacheRead');
+
+  let glm52ReasoningRequest;
+  globalThis.fetch = async (url, init) => {
+    glm52ReasoningRequest = {
+      url: String(url),
+      body: JSON.parse(String(init.body)),
+      headers: Object.fromEntries(new Headers(init.headers).entries()),
+    };
+
+    return new Response(
+      [
+        'data: {"id":"chatcmpl_glm52","object":"chat.completion.chunk","created":0,"model":"glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Thinking."},"finish_reason":null}]}',
+        '',
+        'data: {"id":"chatcmpl_glm52","object":"chat.completion.chunk","created":0,"model":"glm-5.2","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}]}',
+        '',
+        'data: {"id":"chatcmpl_glm52","object":"chat.completion.chunk","created":0,"model":"glm-5.2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"reasoning_tokens":1}}',
+        '',
+        'data: [DONE]',
+        '',
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  };
+  const glm52ReasoningEvents = [];
+  for await (const event of streamSimpleOpenAICompletions(
+    {
+      ...glm52Model,
+      provider: 'theclawbay',
+      api: 'openai-completions',
+      baseUrl: 'https://api.theclawbay.com/v1',
+    },
+    { messages: [{ role: 'user', content: 'Reply exactly OK.', timestamp: 0 }] },
+    { apiKey: 'test-key', reasoning: 'xhigh', maxTokens: 16 },
+  )) {
+    glm52ReasoningEvents.push(event);
+  }
+  const glm52ReasoningDone = glm52ReasoningEvents.find((event) => event.type === 'done');
+  assert.equal(glm52ReasoningRequest.url, 'https://api.theclawbay.com/v1/chat/completions');
+  assert.equal(glm52ReasoningRequest.body.model, 'glm-5.2');
+  assert.equal(glm52ReasoningRequest.body.reasoning_effort, 'max');
+  assert.ok(glm52ReasoningDone, 'GLM 5.2 should stream through Pi openai-completions with reasoning enabled');
+  assert.equal(glm52ReasoningDone.message.model, 'glm-5.2');
 
   const gptImage2 = buildOpenAIModels(['gpt-image-2'])[0];
   assert.equal(gptImage2.name, 'GPT Image 2');
