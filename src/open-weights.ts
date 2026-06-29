@@ -72,7 +72,7 @@ export function createOpenWeightModelConfig(
 		baseUrl: THECLAWBAY_OPENAI_DISCOVERY_BASE_URL,
 		reasoning,
 		...(reasoning ? { thinkingLevelMap: { ...GLM_THINKING_LEVEL_MAP } } : {}),
-		input: ["text", "image"],
+		input: ["text"],
 		cost: { ...cost },
 		contextWindow: metadata.contextWindow ?? OPENAI_DEFAULT_CONTEXT_WINDOW,
 		maxTokens: OPENAI_DEFAULT_MAX_TOKENS,

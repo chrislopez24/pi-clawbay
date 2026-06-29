@@ -216,6 +216,7 @@ try {
   assert.equal(liveOpenWeight?.api, 'openai-completions', 'open-weight models should use Pi OpenAI chat completions compatibility');
   assert.equal(liveOpenWeight?.baseUrl, 'https://api.theclawbay.com/v1', 'open-weight models should use TheClawBay OpenAI-compatible base URL');
   assert.equal(liveOpenWeight?.reasoning, false, 'open-weight models should not expose Pi reasoning controls without live reasoning metadata');
+  assert.deepEqual(liveOpenWeight?.input, ['text'], 'open-weight models should not advertise image input without verified vision support');
   assert.equal(liveOpenWeight?.contextWindow, 262144, 'open-weight models should preserve live context metadata');
   assert.deepEqual(
     liveOpenWeight?.compat,
@@ -225,6 +226,7 @@ try {
   const liveGlm52 = firstRegistrations[0].config.models.find((entry) => entry.id === 'glm-5.2');
   assert.equal(liveGlm52?.api, 'openai-completions', 'GLM 5.2 should use Pi OpenAI chat completions compatibility');
   assert.equal(liveGlm52?.reasoning, true, 'GLM 5.2 should expose Pi reasoning controls despite incomplete discovery metadata');
+  assert.deepEqual(liveGlm52?.input, ['text'], 'GLM 5.2 should avoid image tool results on the OpenAI-completions route');
   assert.deepEqual(
     liveGlm52?.thinkingLevelMap,
     { minimal: null, low: null, medium: null, high: 'high', xhigh: 'max' },
@@ -404,6 +406,7 @@ try {
   assert.equal(openWeightModel.api, 'openai-completions');
   assert.equal(openWeightModel.baseUrl, 'https://api.theclawbay.com/v1');
   assert.equal(openWeightModel.reasoning, false);
+  assert.deepEqual(openWeightModel.input, ['text']);
   assert.equal(openWeightModel.contextWindow, 262144);
   assert.equal(openWeightModel.maxTokens, 128000);
   assert.deepEqual(openWeightModel.compat, { cacheControlFormat: 'anthropic', sendSessionAffinityHeaders: true });
@@ -412,6 +415,7 @@ try {
   assert.equal(glm52Model.name, 'GLM 5.2');
   assert.equal(glm52Model.api, 'openai-completions');
   assert.equal(glm52Model.reasoning, true);
+  assert.deepEqual(glm52Model.input, ['text']);
   assert.equal(glm52Model.contextWindow, 1000000);
   assert.deepEqual(glm52Model.thinkingLevelMap, { minimal: null, low: null, medium: null, high: 'high', xhigh: 'max' });
   assert.deepEqual(glm52Model.compat, { cacheControlFormat: 'anthropic', sendSessionAffinityHeaders: true });
