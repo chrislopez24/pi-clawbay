@@ -6,6 +6,8 @@ import {
 	GPT_54_1M_MODEL_ID,
 	GPT_54_DEFAULT_MODEL_ID,
 	GPT_54_UPSTREAM_MODEL_ID,
+	GPT_56_MODEL_IDS,
+	GPT_56_UNSUPPORTED_MODEL_IDS,
 	IMAGE_GENERATION_MODEL_INPUTS,
 	MODEL_INPUTS,
 	OPENAI_CODEX_CONTEXT_WINDOW,
@@ -31,6 +33,9 @@ type ModelSource = string | TheClawBayModelMetadata;
 type ThinkingLevelMap = NonNullable<ProviderModelConfig["thinkingLevelMap"]>;
 
 const FALLBACK_REASONING_EFFORTS: Record<string, string[]> = {
+	"gpt-5.6": ["none", "low", "medium", "high", "xhigh", "max"],
+	"gpt-5.6-sol": ["none", "low", "medium", "high", "xhigh", "max"],
+	"gpt-5.6-terra": ["none", "low", "medium", "high", "xhigh", "max"],
 	"gpt-5.5": ["low", "medium", "high", "xhigh"],
 	[GPT_54_DEFAULT_MODEL_ID]: ["minimal", "low", "medium", "high"],
 	[GPT_54_1M_MODEL_ID]: ["minimal", "low", "medium", "high"],
@@ -220,7 +225,8 @@ function buildThinkingLevelMap(efforts: string[]): ThinkingLevelMap {
 		low: supported.has("low") ? "low" : null,
 		medium: supported.has("medium") ? "medium" : null,
 		high: supported.has("high") ? "high" : null,
-		xhigh: supported.has("xhigh") ? "xhigh" : supported.has("max") ? "max" : null,
+		xhigh: supported.has("xhigh") ? "xhigh" : null,
+		...(supported.has("max") ? { max: "max" } : {}),
 	};
 }
 
@@ -234,6 +240,10 @@ function createOpenAIModel(source: ModelSource): ProviderModelConfig {
 	const cost = OPENAI_KNOWN_COSTS[id] ?? ZERO_COST;
 	const name = metadata.name?.trim() || formatOpenAIModelName(id);
 	const options = { reasoning: resolveReasoning(metadata), thinkingLevelMap: resolveThinkingLevelMap(metadata) };
+
+	if (GPT_56_MODEL_IDS.includes(id as (typeof GPT_56_MODEL_IDS)[number])) {
+		return createModelConfig(id, name, cost, OPENAI_CODEX_CONTEXT_WINDOW, OPENAI_DEFAULT_MAX_TOKENS, options);
+	}
 
 	if (id === GPT_54_DEFAULT_MODEL_ID) {
 		return createModelConfig(id, name, cost, resolveContextWindow(metadata, OPENAI_CODEX_CONTEXT_WINDOW), OPENAI_DEFAULT_MAX_TOKENS, options);
@@ -293,7 +303,7 @@ export function normalizeOpenAIModelMetadata(
 }
 
 function normalizeOpenAIModelId(id: string): string[] {
-	if (id === "gpt-5.4-pro" || isHiddenImageGenerationModel(id)) {
+	if (id === "gpt-5.4-pro" || GPT_56_UNSUPPORTED_MODEL_IDS.includes(id as (typeof GPT_56_UNSUPPORTED_MODEL_IDS)[number]) || isHiddenImageGenerationModel(id)) {
 		return [];
 	}
 

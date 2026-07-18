@@ -10,7 +10,7 @@ A provider extension for [Pi Coding Agent](https://github.com/earendil-works/pi)
 - **DeepSeek Models** - Dynamically discovered `deepseek-*` models use Pi's OpenAI-compatible chat-completions transport with DeepSeek thinking replay compatibility
 - **Open-Weight Models** - Cache-verified discovered open-weight models use Pi's OpenAI-compatible chat-completions transport with prompt-cache markers and session-affinity headers
 - **Single Provider** - Only `theclawbay` is registered; routing is selected per model
-- **GPT-5.4 Split Options** - `gpt-5.4` and `gpt-5.4[1m]` for clearer cost/context choice
+- **GPT-5.6 Models** - `gpt-5.6`, `gpt-5.6-sol`, and `gpt-5.6-terra` with Pi `xhigh`/`max` thinking and a 272K context cap
 - **GPT Image 2** - Generate PNG images through TheClawBay's direct OpenAI-compatible Images API
 - **High Usage Headroom** - More capacity than standard subscriptions
 - **Simple Setup** - Single API key
@@ -84,10 +84,10 @@ The extension keeps one Pi provider, `theclawbay`, and routes by model family:
   - `api: "theclawbay-anthropic-messages"`
   - `baseUrl: "https://api.theclawbay.com/anthropic"`
   - A small TheClawBay wrapper builds the official Anthropic SDK client, normalizes non-standard SSE streams that omit blank-line event delimiters, then delegates to Pi's native Anthropic transport for `/v1/messages`, tool use, prompt-cache markers, usage parsing, and Claude thinking replay.
-  - Claude requests require Pi `0.79.3+` so the extension can register its custom Anthropic API wrapper and use the current Anthropic compatibility flags.
+  - Claude requests require Pi `0.80.10+` so the extension can register its custom Anthropic API wrapper and use the current Anthropic compatibility flags.
   - TheClawBay Claude tool payloads intentionally omit `tools[].eager_input_streaming` and tool-level `cache_control`; system and conversation cache markers plus `x-session-affinity` are preserved for prompt-cache hits.
   - `claude-haiku-4-5` does not expose Pi thinking controls because TheClawBay/upstream rejects thinking parameters for that model.
-  - Current discovered Claude models include `claude-haiku-4-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, and `claude-sonnet-4-6`.
+  - Current discovered Claude models include `claude-haiku-4-5`, `claude-fable-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, and `claude-sonnet-4-6`; Fable 5 exposes adaptive `xhigh`/`max` thinking.
 - **Gemini models** (`gemini-*`) are registered per model with:
   - `api: "google-generative-ai"`
   - `baseUrl: "https://api.theclawbay.com/v1beta"`
@@ -169,7 +169,7 @@ Why split it?
 
 - `gpt-5.4` is configured with a `272,000` token context window.
 - `gpt-5.4[1m]` is configured with a `1,050,000` token context window.
-- Current non-5.4 GPT-5/Codex variants default to `272,000` context and `128,000` max output tokens.
+- GPT-5.6, GPT-5.6 Sol, and GPT-5.6 Terra use a deliberate `272,000` context cap in this extension, despite TheClawBay advertising a 372K route limit; they support `xhigh` and `max` thinking. Other non-5.4 GPT-5/Codex variants default to `272,000` context and `128,000` max output tokens.
 - Current Claude 4.6+ variants default to `1,000,000` context in Pi metadata. Opus uses `128,000` max output tokens, while Sonnet and Haiku use `64,000`, matching the current Claude output ceilings needed by adaptive `xhigh`/`max` efforts.
 - Gemini variants discovered from `/v1/models` use Pi's Google transport with `1,048,576` context and `65,536` max output tokens.
 - Open-weight variants preserve `context_window` from live discovery and default to `128,000` max output metadata.
@@ -179,6 +179,9 @@ Why split it?
 
 Current fallback list in this package, used only when live discovery and cache are unavailable:
 
+- `gpt-5.6`
+- `gpt-5.6-sol`
+- `gpt-5.6-terra`
 - `gpt-5.5`
 - `gpt-5.4`
 - `gpt-5.4[1m]`
@@ -206,6 +209,9 @@ Live discovery may add newer GPT/Codex, Claude, Gemini, DeepSeek, and cache-veri
 Use `/model` command in pi:
 
 ```text
+/model theclawbay/gpt-5.6
+/model theclawbay/gpt-5.6-sol
+/model theclawbay/gpt-5.6-terra
 /model theclawbay/gpt-5.5
 /model theclawbay/gpt-5.4
 /model theclawbay/gpt-5.4[1m]
@@ -230,7 +236,7 @@ This extension currently registers:
 /clawbay-refresh-models
 ```
 
-`/quota` and `/clawbay-quota` show current usage. `/clawbay-refresh-models` refreshes live model discovery on demand, updates the local cache, and re-registers the provider without needing `/reload`.
+`/quota` and `/clawbay-quota` show current usage. `/clawbay-refresh-models` refreshes live model discovery on demand, updates both the local cache and Pi's provider-scoped model store, and re-registers the provider without needing `/reload`. Pi 0.80 offline/cache-only refreshes restore the existing catalog and never replace it with an empty list.
 
 `/cachehit` was removed.
 
@@ -311,7 +317,7 @@ Useful smoke checks:
 PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --list-models theclawbay
 
 # Basic GPT/Codex reasoning path
-PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gpt-5.4 --thinking low --no-session -p "Say OK and nothing else."
+PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gpt-5.6-sol --thinking max --no-session -p "Say OK and nothing else."
 
 # Gemini native /v1beta path (choose a gemini-* id shown by --list-models)
 PI_CLAWBAY_DEBUG=1 pi --no-extensions -e /path/to/pi-clawbay --model theclawbay/gemini-3-flash-preview --thinking off --no-session -p "Say OK and nothing else."
@@ -351,7 +357,7 @@ PI_CLAWBAY_IMAGE_DIR=/tmp/pi-clawbay-images pi --no-extensions -e /path/to/pi-cl
 - DeepSeek intermittently returns `400 "The \`reasoning_content\` in the thinking mode must be passed back to the API."`: upgrade/reload this extension and refresh models. `deepseek-*` models must use Pi's `openai-completions` DeepSeek compatibility path, not the Codex Responses serializer.
 - Claude model returns an OpenAI/Codex-route error: upgrade/reload this extension and refresh models. `claude-*` models must use the extension's `theclawbay-anthropic-messages` wrapper and TheClawBay `/anthropic`, not `backend-api/codex/responses`.
 - Claude stream parsing fails around `message_stop` or contains concatenated `event:`/`data:` lines: upgrade/reload this extension. The TheClawBay Anthropic wrapper normalizes those SSE chunks before Pi's official parser consumes them.
-- Claude model returns `400 upstream_rejected` with binary-looking escaped content: first confirm the registered Claude model is using Pi `0.79.3+`, the extension's TheClawBay Anthropic wrapper, and current Claude output ceilings. Opus/Sonnet aliases need adaptive thinking, while Haiku must not receive thinking parameters.
+- Claude model returns `400 upstream_rejected` with binary-looking escaped content: first confirm the registered Claude model is using Pi `0.80.10+`, the extension's TheClawBay Anthropic wrapper, and current Claude output ceilings. Opus/Sonnet aliases need adaptive thinking, while Haiku must not receive thinking parameters.
 - Claude tool requests fail but no-tool prompts work: verify the registered model compat still has `supportsEagerToolInputStreaming: false` and `supportsCacheControlOnTools: false`; the wrapper also strips forced `tool_choice` because TheClawBay's Claude proxy rejects it.
 - Gemini model returns `404 upstream returned HTTP 404` on a Codex route: upgrade/reload this extension. `gemini-*` models must use Pi's `google-generative-ai` transport and TheClawBay `/v1beta`, not `backend-api/codex/responses`.
 - Gemini cache is not showing Codex-style cache hits: expected for now. TheClawBay currently blocks `v1beta/cachedContents`; Pi will still report `cachedContentTokenCount` as `cacheRead` if the upstream route returns it.

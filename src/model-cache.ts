@@ -136,18 +136,18 @@ function buildCacheFile(models: TheClawBayModelMetadata[], now: number): ModelCa
 	};
 }
 
-export async function fetchOpenAIModelIds(apiKey: string): Promise<string[] | null> {
-	const metadata = await fetchOpenAIModelMetadata(apiKey);
+export async function fetchOpenAIModelIds(apiKey: string, signal?: AbortSignal): Promise<string[] | null> {
+	const metadata = await fetchOpenAIModelMetadata(apiKey, signal);
 	return metadata ? metadata.map((model) => model.id) : null;
 }
 
-export async function fetchOpenAIModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
+export async function fetchOpenAIModelMetadata(apiKey: string, signal?: AbortSignal): Promise<TheClawBayModelMetadata[] | null> {
 	for (let attempt = 1; attempt <= MODEL_DISCOVERY_MAX_ATTEMPTS; attempt += 1) {
-		const metadata = await fetchCompleteOpenAIModelMetadata(apiKey);
+		const metadata = await fetchCompleteOpenAIModelMetadata(apiKey, signal);
 		if (metadata) {
 			return metadata;
 		}
-		if (attempt < MODEL_DISCOVERY_MAX_ATTEMPTS) {
+		if (attempt < MODEL_DISCOVERY_MAX_ATTEMPTS && !signal?.aborted) {
 			await waitForDiscoveryRetry();
 		}
 	}
@@ -159,8 +159,11 @@ function waitForDiscoveryRetry(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, MODEL_DISCOVERY_RETRY_DELAY_MS));
 }
 
-async function fetchCompleteOpenAIModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
-	const [openaiMetadata, claudeMetadata] = await Promise.all([fetchOpenAICompatibleModelMetadata(apiKey), fetchClaudeModelMetadata(apiKey)]);
+async function fetchCompleteOpenAIModelMetadata(apiKey: string, signal?: AbortSignal): Promise<TheClawBayModelMetadata[] | null> {
+	const [openaiMetadata, claudeMetadata] = await Promise.all([
+		fetchOpenAICompatibleModelMetadata(apiKey, signal),
+		fetchClaudeModelMetadata(apiKey, signal),
+	]);
 	if (!openaiMetadata) {
 		debugLog("Skipping partial live model registration because /v1/models did not return a usable model list.");
 		return null;
@@ -175,13 +178,13 @@ async function fetchCompleteOpenAIModelMetadata(apiKey: string): Promise<TheClaw
 	return merged.length > 0 ? merged : null;
 }
 
-async function fetchOpenAICompatibleModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
+async function fetchOpenAICompatibleModelMetadata(apiKey: string, signal?: AbortSignal): Promise<TheClawBayModelMetadata[] | null> {
 	try {
 		const response = await fetch(THECLAWBAY_OPENAI_MODELS_URL, {
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
 			},
-			signal: AbortSignal.timeout(MODEL_DISCOVERY_TIMEOUT_MS),
+			signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(MODEL_DISCOVERY_TIMEOUT_MS)]) : AbortSignal.timeout(MODEL_DISCOVERY_TIMEOUT_MS),
 		});
 
 		if (!response.ok) {
@@ -198,14 +201,14 @@ async function fetchOpenAICompatibleModelMetadata(apiKey: string): Promise<TheCl
 	}
 }
 
-async function fetchClaudeModelMetadata(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
+async function fetchClaudeModelMetadata(apiKey: string, signal?: AbortSignal): Promise<TheClawBayModelMetadata[] | null> {
 	try {
 		const response = await fetch(THECLAWBAY_CLAUDE_MODELS_URL, {
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
 				"anthropic-version": THECLAWBAY_ANTHROPIC_VERSION_HEADER,
 			},
-			signal: AbortSignal.timeout(MODEL_DISCOVERY_TIMEOUT_MS),
+			signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(MODEL_DISCOVERY_TIMEOUT_MS)]) : AbortSignal.timeout(MODEL_DISCOVERY_TIMEOUT_MS),
 		});
 
 		if (!response.ok) {
@@ -270,8 +273,8 @@ function isPositiveInteger(value: unknown): value is number {
 	return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
-export async function refreshProviderModelsNow(pi: ExtensionAPI, apiKey: string): Promise<number | null> {
-	const metadata = await fetchOpenAIModelMetadata(apiKey);
+export async function refreshProviderModelsNow(pi: ExtensionAPI, apiKey: string, signal?: AbortSignal): Promise<number | null> {
+	const metadata = await fetchOpenAIModelMetadata(apiKey, signal);
 	if (!metadata) {
 		return null;
 	}

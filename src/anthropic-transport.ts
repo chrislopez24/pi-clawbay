@@ -1,9 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import {
-	streamAnthropic,
+	stream as streamAnthropic,
 	type AnthropicEffort,
 	type AnthropicOptions,
-} from "@earendil-works/pi-ai/anthropic";
+} from "@earendil-works/pi-ai/api/anthropic-messages";
 import type {
 	Api,
 	AssistantMessageEventStream,
@@ -37,13 +37,22 @@ const PI_DOCS_LOOKUP_LIST = `- When asked about:
 type Fetch = typeof fetch;
 type AnthropicCompat = {
 	forceAdaptiveThinking?: boolean;
+	supportsTemperature?: boolean;
+	supportsCacheControlOnTools?: boolean;
 	sendSessionAffinityHeaders?: boolean;
 	supportsEagerToolInputStreaming?: boolean;
 };
 type TheClawBayAnthropicOptions = SimpleStreamOptions & { toolChoice?: AnthropicOptions["toolChoice"] };
 
-function mergeHeaders(...sources: Array<Record<string, string> | undefined>): Record<string, string> {
-	return Object.assign({}, ...sources.filter(Boolean));
+function mergeHeaders(...sources: Array<Record<string, string | null> | undefined>): Record<string, string> {
+	const headers: Record<string, string> = {};
+	for (const source of sources) {
+		for (const [name, value] of Object.entries(source ?? {})) {
+			if (value === null) delete headers[name];
+			else headers[name] = value;
+		}
+	}
+	return headers;
 }
 
 function shouldNormalizeAnthropicSse(response: Response): boolean {
@@ -192,7 +201,7 @@ function adjustMaxTokensForThinking(
 	reasoning: NonNullable<SimpleStreamOptions["reasoning"]>,
 	customBudgets?: SimpleStreamOptions["thinkingBudgets"]
 ): { maxTokens: number; thinkingBudgetTokens: number } {
-	const budgets = { minimal: 1024, low: 2048, medium: 8192, high: 16384, ...customBudgets };
+	const budgets: Record<string, number> = { minimal: 1024, low: 2048, medium: 8192, high: 16384, ...customBudgets };
 	const level = reasoning === "xhigh" ? "high" : reasoning;
 	let thinkingBudgetTokens = budgets[level] ?? budgets.high;
 	const maxTokens = requestedMaxTokens === undefined ? modelMaxTokens : Math.min(requestedMaxTokens + thinkingBudgetTokens, modelMaxTokens);

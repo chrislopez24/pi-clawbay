@@ -30,6 +30,7 @@ const CLAUDE_KNOWN_COSTS: Record<string, ProviderModelConfig["cost"]> = {
 	"claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 	"claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 	"claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+	"claude-fable-5": { input: 0.925, output: 4.613, cacheRead: 0.0925, cacheWrite: 1.15625 },
 };
 
 export function isClaudeModelId(id: string): boolean {
@@ -53,6 +54,10 @@ function resolveClaudeContextWindow(metadata: TheClawBayModelMetadata): number {
 }
 
 function resolveClaudeMaxTokens(id: string): number {
+	if (id.includes("fable-5")) {
+		return CLAUDE_OPUS_MAX_TOKENS;
+	}
+
 	if (id.includes("opus-4-")) {
 		return CLAUDE_OPUS_MAX_TOKENS;
 	}
@@ -69,6 +74,10 @@ function resolveClaudeMaxTokens(id: string): number {
 }
 
 function resolveClaudeCompat(id: string): ClaudeCompat | undefined {
+	if (id === "claude-fable-5") {
+		return { ...THECLAWBAY_CLAUDE_PROXY_COMPAT, forceAdaptiveThinking: true };
+	}
+
 	if (id === "claude-opus-4-7" || id === "claude-opus-4-8") {
 		return { ...THECLAWBAY_CLAUDE_PROXY_COMPAT, forceAdaptiveThinking: true, supportsTemperature: false };
 	}
@@ -81,6 +90,10 @@ function resolveClaudeCompat(id: string): ClaudeCompat | undefined {
 }
 
 function resolveClaudeThinkingLevelMap(id: string): ProviderModelConfig["thinkingLevelMap"] | undefined {
+	if (id === "claude-fable-5") {
+		return { xhigh: "xhigh", max: "max" };
+	}
+
 	if (!supportsClaudeThinking(id)) {
 		return undefined;
 	}
@@ -90,7 +103,7 @@ function resolveClaudeThinkingLevelMap(id: string): ProviderModelConfig["thinkin
 	}
 
 	if (id === "claude-opus-4-6" || id === "claude-sonnet-4-6") {
-		return { xhigh: "max" };
+		return { max: "max" };
 	}
 
 	return undefined;

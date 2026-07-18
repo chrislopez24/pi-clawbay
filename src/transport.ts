@@ -1,12 +1,12 @@
 import {
 	createAssistantMessageEventStream,
-	streamSimpleOpenAIResponses,
 	type Api,
 	type AssistantMessageEventStream,
 	type Context,
 	type Model,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { streamSimple as streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/api/openai-responses";
 import { THECLAWBAY_OPENAI_DISCOVERY_BASE_URL } from "./constants.js";
 import { streamSimpleTheClawBayImageGeneration } from "./image-generation.js";
 import { dedupeIds, isSupportedImageGenerationModel, resolveUpstreamModelId } from "./models.js";

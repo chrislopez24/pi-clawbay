@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { streamSimpleGoogle } from '@earendil-works/pi-ai';
-import { streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/openai-completions';
+import { streamSimple as streamSimpleGoogle } from '@earendil-works/pi-ai/api/google-generative-ai';
+import { streamSimple as streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/api/openai-completions';
 import {
   normalizeTheClawBayAnthropicSystemPrompt,
   streamSimpleTheClawBayAnthropicMessages,
@@ -112,6 +112,32 @@ const LIVE_CLAUDE_MODEL_DATA = [
   { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4 6' },
 ];
 
+const GPT56_MODEL_DATA = [
+  {
+    id: 'gpt-5.6',
+    display_name: 'GPT-5.6',
+    context_window: 372000,
+    supports_reasoning: true,
+    supported_reasoning_efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    default_reasoning_effort: 'medium',
+  },
+  {
+    id: 'gpt-5.6-sol',
+    display_name: 'GPT-5.6 Sol',
+    context_window: 372000,
+    supports_reasoning: true,
+    supported_reasoning_efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    default_reasoning_effort: 'medium',
+  },
+  {
+    id: 'gpt-5.6-terra',
+    display_name: 'GPT-5.6 Terra',
+    context_window: 372000,
+    supports_reasoning: true,
+    supported_reasoning_efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    default_reasoning_effort: 'medium',
+  },
+];
 const MINI_OPENAI_MODEL_DATA = [{ id: 'gpt-5.4-mini', context_window: 512000 }];
 const MINI_MODEL_IDS = ['gpt-5.4-mini'];
 const OPUS_CLAUDE_MODEL_DATA = [{ id: 'claude-opus-4-8', display_name: 'Claude Opus 4 8' }];
@@ -195,6 +221,22 @@ try {
   assert.equal(liveGpt55?.contextWindow, 384000, 'live context_window should override the default Codex context window');
   assert.equal(liveGpt55?.thinkingLevelMap?.xhigh, 'xhigh', 'gpt-5.5 should expose xhigh from live metadata');
   assert.equal(liveGpt55?.thinkingLevelMap?.minimal, 'low', 'gpt-5.5 should map minimal to low when only low is supported upstream');
+  const gpt56Models = buildOpenAIModels(GPT56_MODEL_DATA);
+  assert.deepEqual(gpt56Models.find((model) => model.id === 'gpt-5.6')?.cost, {
+    input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25,
+    tiers: [{ inputTokensAbove: 272000, input: 10, output: 45, cacheRead: 1, cacheWrite: 12.5 }],
+  });
+  assert.deepEqual(gpt56Models.find((model) => model.id === 'gpt-5.6-terra')?.cost, {
+    input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125,
+    tiers: [{ inputTokensAbove: 272000, input: 5, output: 22.5, cacheRead: 0.5, cacheWrite: 6.25 }],
+  });
+  for (const id of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']) {
+    const model = gpt56Models.find((entry) => entry.id === id);
+    assert.equal(model?.contextWindow, 272000, `${id} should use the TheClawBay 272K context cap`);
+    assert.equal(model?.thinkingLevelMap?.max, 'max', `${id} should expose Pi max thinking`);
+    assert.equal(model?.thinkingLevelMap?.xhigh, 'xhigh', `${id} should expose Pi xhigh thinking`);
+  }
+  assert.equal(normalizeOpenAIModelIds(['gpt-5.6-luna']).length, 0, 'unsupported GPT-5.6 Luna should stay hidden');
   for (const id of ['gpt-5.4', 'gpt-5.4[1m]']) {
     const model = firstRegistrations[0].config.models.find((entry) => entry.id === id);
     assert.equal(model?.contextWindow, id === 'gpt-5.4[1m]' ? 1050000 : 272000, `${id} should use its expected context window`);
@@ -251,6 +293,12 @@ try {
     'DeepSeek models should expose only the upstream-recommended high/max thinking efforts',
   );
 
+  const fable = buildOpenAIModels([{ id: 'claude-fable-5', display_name: 'Claude Fable 5' }])[0];
+  assert.equal(fable.reasoning, true);
+  assert.deepEqual(fable.thinkingLevelMap, { xhigh: 'xhigh', max: 'max' });
+  assert.equal(fable.maxTokens, 128000);
+  assert.deepEqual(fable.cost, { input: 0.925, output: 4.613, cacheRead: 0.0925, cacheWrite: 1.15625 });
+
   const liveClaude = firstRegistrations[0].config.models.find((entry) => entry.id === 'claude-opus-4-8');
   assert.equal(liveClaude?.api, THECLAWBAY_ANTHROPIC_API, 'Claude models should use TheClawBay Anthropic transport wrapper');
   assert.equal(liveClaude?.baseUrl, 'https://api.theclawbay.com/anthropic', 'Claude models should use TheClawBay\'s Anthropic-compatible base URL');
@@ -270,7 +318,7 @@ try {
   assert.equal(liveClaude?.contextWindow, 1000000, 'new Claude 4.6+ models should use 1M context in Pi metadata');
   assert.equal(liveClaude?.maxTokens, 128000, 'Claude Opus should use the current upstream output limit for xhigh/max efforts');
   const liveSonnet = firstRegistrations[0].config.models.find((entry) => entry.id === 'claude-sonnet-4-6');
-  assert.deepEqual(liveSonnet?.thinkingLevelMap, { xhigh: 'max' }, 'Sonnet 4.6 should map Pi xhigh to Anthropic max effort');
+  assert.deepEqual(liveSonnet?.thinkingLevelMap, { max: 'max' }, 'Sonnet 4.6 should expose Pi max as Anthropic max effort');
   assert.equal(liveSonnet?.maxTokens, 64000, 'Claude Sonnet should use the current upstream output limit for max effort');
   const liveHaiku = firstRegistrations[0].config.models.find((entry) => entry.id === 'claude-haiku-4-5');
   assert.equal(liveHaiku?.reasoning, false, 'TheClawBay Claude Haiku should not expose thinking controls that upstream rejects');
@@ -529,6 +577,23 @@ try {
   assert.ok(glm52ReasoningDone, 'GLM 5.2 should stream through Pi openai-completions with reasoning enabled');
   assert.equal(glm52ReasoningDone.message.model, 'glm-5.2');
 
+  let gpt56ResponseRequest;
+  globalThis.fetch = async (url, init) => {
+    gpt56ResponseRequest = { url: String(url), body: JSON.parse(String(init.body)) };
+    return new Response('data: {"type":"response.completed","response":{"id":"resp_gpt56","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\ndata: [DONE]\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  };
+  const gpt56Stream = streamSimpleTheClawBayCodexResponses(
+    { ...gpt56Models.find((model) => model.id === 'gpt-5.6'), provider: 'theclawbay', api: 'theclawbay-codex-responses' },
+    { messages: [{ role: 'user', content: 'Reply OK.', timestamp: 0 }] },
+    { apiKey: 'test-key', reasoning: 'max', maxTokens: 16 },
+  );
+  for await (const _event of gpt56Stream) {}
+  assert.equal(gpt56ResponseRequest.url, 'https://api.theclawbay.com/v1/responses');
+  assert.equal(gpt56ResponseRequest.body.reasoning.effort, 'max', 'GPT-5.6 max should reach the Responses payload');
+
   const gptImage2 = buildOpenAIModels(['gpt-image-2'])[0];
   assert.equal(gptImage2.name, 'GPT Image 2');
   assert.deepEqual(gptImage2.cost, { input: 5, output: 30, cacheRead: 2, cacheWrite: 5 });
@@ -550,7 +615,7 @@ try {
   assert.equal(opus48.maxTokens, 128000);
 
   const sonnet46 = buildOpenAIModels(['claude-sonnet-4-6'])[0];
-  assert.deepEqual(sonnet46.thinkingLevelMap, { xhigh: 'max' });
+  assert.deepEqual(sonnet46.thinkingLevelMap, { max: 'max' });
   assert.equal(sonnet46.maxTokens, 64000);
 
   let anthropicRequest;
@@ -737,6 +802,34 @@ try {
   assert.deepEqual(registrationModelIds(refreshRegistrations), MINI_MODEL_IDS);
   assert.equal(refreshRegistrations[0].config.models[0].contextWindow, 512000, 'manual refresh should apply live context metadata');
   assert.deepEqual(refreshNotifications, [{ message: 'Refreshed 1 TheClawBay model from live discovery', level: 'info' }]);
+  const refreshConfig = refreshRegistrations[0].config;
+  const offlineStoreWrites = [];
+  const offlineModels = await refreshConfig.refreshModels({
+    credential: { type: 'api_key', key: 'test-key' },
+    allowNetwork: false,
+    store: {
+      async read() { return { models: [{ ...refreshConfig.models[0], provider: 'theclawbay' }] }; },
+      async write(entry) { offlineStoreWrites.push(entry); },
+      async delete() {},
+    },
+  });
+  assert.deepEqual(offlineModels.map((model) => model.id), MINI_MODEL_IDS);
+  assert.deepEqual(offlineStoreWrites, [], 'offline refresh should not overwrite the Pi model store');
+  let abortedFetches = 0;
+  const abortController = new AbortController();
+  abortController.abort();
+  globalThis.fetch = async () => {
+    abortedFetches += 1;
+    throw new Error('aborted refresh should not fetch');
+  };
+  const abortedModels = await refreshConfig.refreshModels({
+    credential: { type: 'api_key', key: 'test-key' },
+    allowNetwork: true,
+    signal: abortController.signal,
+    store: { async read() { return undefined; }, async write() {}, async delete() {} },
+  });
+  assert.deepEqual(abortedModels.map((model) => model.id), MINI_MODEL_IDS);
+  assert.equal(abortedFetches, 0, 'aborted refresh should not start discovery');
 
   globalThis.fetch = createDiscoveryFetch({ openai: false, claude: OPUS_CLAUDE_MODEL_DATA });
   refreshRegistrations.length = 0;
@@ -1034,6 +1127,7 @@ try {
     output: 1,
     cacheRead: 0,
     cacheWrite: 0,
+    reasoning: 0,
     totalTokens: 2,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
