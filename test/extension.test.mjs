@@ -149,7 +149,10 @@ function escapeRegExp(value) {
 function createPi(registrations, commands = {}, handlers = {}) {
   return {
     registerProvider(name, config) {
-      registrations.push({ name, config });
+      const existing = registrations.findIndex((registration) => registration.name === name);
+      const registration = { name, config };
+      if (existing >= 0) registrations[existing] = registration;
+      else registrations.push(registration);
     },
     registerCommand(name, config) {
       commands[name] = config;
@@ -201,6 +204,10 @@ function textDeltas(events) {
   return events.filter((event) => event.type === 'text_delta').map((event) => event.delta).join('');
 }
 
+async function flushStartupDiscovery() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 try {
   process.env.THECLAWBAY_API_KEY = 'test-key';
   globalThis.fetch = createDiscoveryFetch();
@@ -208,7 +215,8 @@ try {
   const firstRegistrations = [];
   const firstHandlers = {};
   const firstResult = await extension(createPi(firstRegistrations, {}, firstHandlers));
-  assert.equal(firstResult, undefined, 'extension factory should resolve after startup discovery');
+  assert.equal(firstResult, undefined, 'extension factory should resolve without waiting for startup discovery');
+  await flushStartupDiscovery();
   assert.equal(firstRegistrations.length, 2, 'provider should register the visible provider and internal Anthropic transport');
   assert.equal(typeof firstHandlers.message_end, 'function', 'context overflow normalization should be registered');
   assert.deepEqual(registrationModelIds(firstRegistrations), LIVE_MODEL_IDS);
@@ -345,8 +353,14 @@ try {
   await extension(createPi(transientStartupRegistrations));
   assert.deepEqual(
     registrationModelIds(transientStartupRegistrations),
+    LIVE_MODEL_IDS,
+    'startup should register the cache before remote discovery completes',
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepEqual(
+    registrationModelIds(transientStartupRegistrations),
     MINI_MODEL_IDS,
-    'startup should retry complete live discovery before falling back to cache',
+    'background discovery should retry and replace the cached catalog when it succeeds',
   );
   assert.equal(transientStartupRegistrations[0].config.models[0].contextWindow, 512000);
   writeFileSync(join(cacheDir, 'models.json'), fullLiveCacheSnapshot, 'utf8');
@@ -354,6 +368,7 @@ try {
   globalThis.fetch = async () => ({ ok: false, async json() { return {}; } });
   const secondRegistrations = [];
   await extension(createPi(secondRegistrations));
+  await flushStartupDiscovery();
   assert.deepEqual(registrationModelIds(secondRegistrations), LIVE_MODEL_IDS);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'gpt-5.5')?.contextWindow, 384000);
   assert.equal(secondRegistrations[0].config.models.find((model) => model.id === 'deepseek-v4-flash')?.api, 'openai-completions');
@@ -363,6 +378,7 @@ try {
   globalThis.fetch = createDiscoveryFetch({ openai: false, claude: OPUS_CLAUDE_MODEL_DATA });
   const partialStartupRegistrations = [];
   await extension(createPi(partialStartupRegistrations));
+  await flushStartupDiscovery();
   assert.deepEqual(
     registrationModelIds(partialStartupRegistrations),
     LIVE_MODEL_IDS,
@@ -372,6 +388,7 @@ try {
   globalThis.fetch = createDiscoveryFetch({ openai: MINI_OPENAI_MODEL_DATA, claude: false });
   const missingClaudeStartupRegistrations = [];
   await extension(createPi(missingClaudeStartupRegistrations));
+  await flushStartupDiscovery();
   assert.deepEqual(
     registrationModelIds(missingClaudeStartupRegistrations),
     LIVE_MODEL_IDS,

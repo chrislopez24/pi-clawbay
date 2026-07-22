@@ -20,7 +20,8 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerModelRefreshCommand, resolveStartupProviderModels } from "./model-cache.js";
+import { buildFallbackOpenAIModels, buildOpenAIModels } from "./models.js";
+import { readCachedModelMetadata, registerModelRefreshCommand, resolveStartupProviderModels } from "./model-cache.js";
 import { registerOverflowNormalization } from "./overflow.js";
 import { registerProviders } from "./provider.js";
 import { getApiKey, registerQuotaCommand } from "./quota.js";
@@ -40,18 +41,35 @@ function warnMissingApiKey(): void {
 	);
 }
 
-export default async function (pi: ExtensionAPI): Promise<void> {
+export default function (pi: ExtensionAPI): void {
 	const apiKey = getApiKey();
 
 	if (!apiKey) {
 		warnMissingApiKey();
 	}
 
-	const { models, source } = await resolveStartupProviderModels(apiKey);
+	// Keep remote model discovery off the startup critical path. Use the last
+	// catalog immediately and refresh it in the background; the same refresh
+	// remains available manually through /clawbay-refresh-models.
+	const cachedModels = readCachedModelMetadata(Date.now(), { allowStale: true });
+	const models = cachedModels ? buildOpenAIModels(cachedModels) : buildFallbackOpenAIModels();
+	const source = cachedModels ? "cache" : "fallback";
 	debugLog(`Registering ${models.length} model(s) from ${source}.`);
 	registerProviders(pi, models);
-	registerOverflowNormalization(pi);
 
+	if (apiKey) {
+		void resolveStartupProviderModels(apiKey)
+			.then((result) => {
+				if (result.source !== "live") return;
+				debugLog(`Registering ${result.models.length} model(s) from live discovery.`);
+				registerProviders(pi, result.models);
+			})
+			.catch((error: unknown) => {
+				debugLog(`Background model discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+			});
+	}
+
+	registerOverflowNormalization(pi);
 	registerQuotaCommand(pi);
 	registerModelRefreshCommand(pi, getApiKey);
 }
