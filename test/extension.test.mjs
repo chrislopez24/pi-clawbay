@@ -3,6 +3,9 @@ import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import {
+  createAssistantMessageEventStream,
+} from '@earendil-works/pi-ai';
 import { streamSimple as streamSimpleGoogle } from '@earendil-works/pi-ai/api/google-generative-ai';
 import { streamSimple as streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/api/openai-completions';
 import {
@@ -11,7 +14,12 @@ import {
 } from '../dist/anthropic-transport.js';
 import extension from '../dist/index.js';
 import { createGoogleModelConfig, isGoogleModelId } from '../dist/google-models.js';
-import { readCachedModelIds, readCachedModelMetadata } from '../dist/model-cache.js';
+import {
+  fetchOpenAIModelMetadata,
+  readCachedModelIds,
+  readCachedModelMetadata,
+  resetModelDiscoveryForTests,
+} from '../dist/model-cache.js';
 import { buildOpenAIModels, normalizeOpenAIModelIds } from '../dist/models.js';
 import {
   buildTheClawBayHeaders,
@@ -20,6 +28,7 @@ import {
   createTheClawBayStreamModel,
   restoreTheClawBayEventProvider,
   streamSimpleTheClawBayCodexResponses,
+  wrapTheClawBayStream,
 } from '../dist/transport.js';
 import { normalizeTheClawBayContextOverflow } from '../dist/overflow.js';
 
@@ -341,6 +350,22 @@ try {
   assert.equal(cache.models.find((model) => model.id === 'gemini-3-pro-preview')?.supportsReasoning, false, 'cache should preserve live reasoning metadata');
 
   const fullLiveCacheSnapshot = readFileSync(join(cacheDir, 'models.json'), 'utf8');
+  let freshCacheFetches = 0;
+  globalThis.fetch = async () => {
+    freshCacheFetches += 1;
+    throw new Error('fresh startup cache should not trigger discovery');
+  };
+  const freshCacheRegistrations = [];
+  await extension(createPi(freshCacheRegistrations));
+  await flushStartupDiscovery();
+  assert.deepEqual(registrationModelIds(freshCacheRegistrations), LIVE_MODEL_IDS);
+  assert.equal(freshCacheFetches, 0, 'fresh startup cache should avoid unnecessary discovery requests');
+
+  writeFileSync(
+    join(cacheDir, 'models.json'),
+    fullLiveCacheSnapshot.replace(cache.fetchedAt, new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString()),
+    'utf8',
+  );
   let transientOpenAIRequests = 0;
   globalThis.fetch = createDiscoveryFetch({
     claude: [],
@@ -848,6 +873,60 @@ try {
   assert.deepEqual(abortedModels.map((model) => model.id), MINI_MODEL_IDS);
   assert.equal(abortedFetches, 0, 'aborted refresh should not start discovery');
 
+  resetModelDiscoveryForTests();
+  let sharedOpenAIRequests = 0;
+  let sharedClaudeRequests = 0;
+  let releaseDiscovery;
+  const discoveryGate = new Promise((resolve) => { releaseDiscovery = resolve; });
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/anthropic/v1/models')) sharedClaudeRequests += 1;
+    else if (String(url).endsWith('/v1/models')) sharedOpenAIRequests += 1;
+    else throw new Error(`unexpected fetch ${url}`);
+    await discoveryGate;
+    return discoveryEndpointResponse(String(url).endsWith('/anthropic/v1/models') ? [] : MINI_OPENAI_MODEL_DATA);
+  };
+  const firstSharedDiscovery = fetchOpenAIModelMetadata('shared-key');
+  const secondSharedDiscovery = fetchOpenAIModelMetadata('shared-key');
+  releaseDiscovery();
+  const [firstSharedModels, secondSharedModels] = await Promise.all([firstSharedDiscovery, secondSharedDiscovery]);
+  assert.deepEqual(firstSharedModels, secondSharedModels);
+  assert.equal(sharedOpenAIRequests, 1, 'concurrent discovery should share one OpenAI catalog request');
+  assert.equal(sharedClaudeRequests, 1, 'concurrent discovery should share one Claude catalog request');
+
+  const freshStoreWrites = [];
+  let freshStoreFetches = 0;
+  globalThis.fetch = async () => {
+    freshStoreFetches += 1;
+    throw new Error('fresh Pi model store should not fetch unless forced');
+  };
+  const freshStoredModels = await refreshConfig.refreshModels({
+    credential: { type: 'api_key', key: 'test-key' },
+    allowNetwork: true,
+    store: {
+      async read() { return { models: [{ ...refreshConfig.models[0], provider: 'theclawbay' }], checkedAt: Date.now() }; },
+      async write(entry) { freshStoreWrites.push(entry); },
+      async delete() {},
+    },
+  });
+  assert.deepEqual(freshStoredModels.map((model) => model.id), MINI_MODEL_IDS);
+  assert.equal(freshStoreFetches, 0);
+  assert.deepEqual(freshStoreWrites, []);
+
+  resetModelDiscoveryForTests();
+  globalThis.fetch = createDiscoveryFetch({ openai: MINI_OPENAI_MODEL_DATA, claude: [] });
+  const forcedStoreWrites = [];
+  await refreshConfig.refreshModels({
+    credential: { type: 'api_key', key: 'test-key' },
+    allowNetwork: true,
+    force: true,
+    store: {
+      async read() { return { models: [{ ...refreshConfig.models[0], provider: 'theclawbay' }], checkedAt: Date.now() }; },
+      async write(entry) { forcedStoreWrites.push(entry); },
+      async delete() {},
+    },
+  });
+  assert.equal(forcedStoreWrites.length, 1, 'forced Pi refresh should bypass catalog freshness');
+
   globalThis.fetch = createDiscoveryFetch({ openai: false, claude: OPUS_CLAUDE_MODEL_DATA });
   refreshRegistrations.length = 0;
   refreshNotifications.length = 0;
@@ -1038,6 +1117,36 @@ try {
   assert.equal(restored.message.provider, 'theclawbay');
   assert.equal(restored.message.api, 'theclawbay-codex-responses');
   assert.equal(restored.message.model, 'gpt-5.4[1m]');
+
+  const throwingSource = createAssistantMessageEventStream();
+  throwingSource[Symbol.asyncIterator] = async function* () {
+    yield {
+      type: 'start',
+      partial: {
+        role: 'assistant',
+        content: [],
+        api: 'openai-responses',
+        provider: 'openai-codex',
+        model: 'gpt-5.4',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'stop',
+        timestamp: Date.now(),
+      },
+    };
+    throw new Error('unexpected source failure');
+  };
+  const wrappedEvents = [];
+  for await (const event of wrapTheClawBayStream(
+    throwingSource,
+    { ...streamModel, provider: 'theclawbay', api: 'theclawbay-codex-responses', id: 'gpt-5.4[1m]' },
+  )) {
+    wrappedEvents.push(event);
+  }
+  const wrappedError = wrappedEvents.find((event) => event.type === 'error');
+  assert.match(wrappedError?.error?.errorMessage, /unexpected source failure/);
+  assert.equal(wrappedError?.error?.provider, 'theclawbay');
+  assert.equal(wrappedError?.error?.api, 'theclawbay-codex-responses');
+  assert.equal(wrappedError?.error?.model, 'gpt-5.4[1m]');
 
   let googleRequest;
   globalThis.fetch = async (url, init) => {
@@ -1293,7 +1402,7 @@ try {
       if (retryImageAttempts === 1) {
         return new Response(JSON.stringify({ error: { message: 'temporarily unavailable' } }), {
           status: 503,
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', 'retry-after': '0' },
         });
       }
 
@@ -1336,6 +1445,40 @@ try {
   const retryGeneratedPath = retryImageText.match(/`([^`]+\.png)`/)?.[1];
   assert.ok(retryGeneratedPath, 'retried image generation should include the saved PNG path');
   assert.equal(readFileSync(retryGeneratedPath, 'utf8'), 'final-image-bytes', 'direct image response b64_json should be saved as the final image');
+
+  process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES = '0';
+  globalThis.fetch = async (_url, init) => new Promise((_, reject) => {
+    const keepAlive = setTimeout(() => reject(new Error('timeout mock did not abort')), 1000);
+    init.signal.addEventListener('abort', () => {
+      clearTimeout(keepAlive);
+      reject(init.signal.reason);
+    }, { once: true });
+  });
+  const timeoutImageEvents = [];
+  for await (const event of streamSimpleTheClawBayCodexResponses(
+    {
+      id: 'gpt-image-2',
+      name: 'GPT Image 2',
+      provider: 'theclawbay',
+      api: 'theclawbay-codex-responses',
+      baseUrl: 'https://api.theclawbay.com/backend-api/codex',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 5, output: 30, cacheRead: 2, cacheWrite: 5 },
+      contextWindow: 272000,
+      maxTokens: 65536,
+    },
+    { messages: [{ role: 'user', content: 'Draw an image that times out.', timestamp: 0 }] },
+    { apiKey: 'test-key', timeoutMs: 5 },
+  )) {
+    timeoutImageEvents.push(event);
+  }
+  assert.match(
+    timeoutImageEvents.find((event) => event.type === 'error')?.error?.errorMessage,
+    /image generation timed out after 5ms/,
+  );
+  if (originalImageMaxRetries === undefined) delete process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES;
+  else process.env.PI_CLAWBAY_IMAGE_MAX_RETRIES = originalImageMaxRetries;
 
   globalThis.fetch = async (url) => {
     if (String(url).endsWith('/images/generations')) {

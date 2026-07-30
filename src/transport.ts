@@ -1,6 +1,7 @@
 import {
 	createAssistantMessageEventStream,
 	type Api,
+	type AssistantMessage,
 	type AssistantMessageEventStream,
 	type Context,
 	type Model,
@@ -121,14 +122,43 @@ export function restoreTheClawBayEventProvider<T>(event: T, originalModel: Pick<
 	return event;
 }
 
-function wrapTheClawBayStream(source: AssistantMessageEventStream, originalModel: Model<Api>): AssistantMessageEventStream {
+export function wrapTheClawBayStream(source: AssistantMessageEventStream, originalModel: Model<Api>): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
 
 	void (async () => {
-		for await (const event of source) {
-			stream.push(restoreTheClawBayEventProvider(event, originalModel));
+		let partial: AssistantMessage | undefined;
+		try {
+			for await (const event of source) {
+				const restored = restoreTheClawBayEventProvider(event, originalModel);
+				if ("partial" in restored) {
+					partial = restored.partial;
+				}
+				stream.push(restored);
+			}
+		} catch (error) {
+			const message: AssistantMessage = partial ?? {
+				role: "assistant",
+				content: [],
+				api: originalModel.api,
+				provider: originalModel.provider,
+				model: originalModel.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "error",
+				timestamp: Date.now(),
+			};
+			message.stopReason = "error";
+			message.errorMessage = error instanceof Error ? error.message : String(error);
+			stream.push({ type: "error", reason: "error", error: message });
+		} finally {
+			stream.end();
 		}
-		stream.end();
 	})();
 
 	return stream;

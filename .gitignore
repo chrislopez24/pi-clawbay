@@ -33,4 +33,3 @@ npm-debug.log*
 
 # Package files
 *.tgz
-package-lock.json

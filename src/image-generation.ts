@@ -26,9 +26,17 @@ interface DirectImageGenerationResult {
 	revisedPrompt?: string;
 }
 
+interface DirectImageRequestResult {
+	response?: Response;
+	error?: Error;
+}
+
 type ImageProgressCallback = (message: string) => void;
 
 const DEFAULT_DIRECT_IMAGE_MAX_RETRIES = 5;
+const DEFAULT_DIRECT_IMAGE_TIMEOUT_MS = 180_000;
+const DIRECT_IMAGE_RETRY_BASE_DELAY_MS = 500;
+const DIRECT_IMAGE_RETRY_MAX_DELAY_MS = 30_000;
 const DIRECT_IMAGE_SIZE = "1024x1024";
 const RETRY_PROGRESS_MESSAGE = "⚠️ Image service was temporarily busy. Retrying…\n";
 
@@ -161,16 +169,18 @@ async function fetchDirectImageGeneration(
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		onProgress?.("🖌️ Generating image…\n");
-		const response = await trySendDirectImageRequest(apiKey, body, options);
-		if (response instanceof Error) {
-			lastError = response;
+		const result = await trySendDirectImageRequest(apiKey, body, options);
+		if (!result.response) {
+			lastError = result.error;
 			if (!shouldRetryDirectImageRequest(attempt, maxRetries, undefined, options)) {
-				throw response;
+				throw result.error ?? new Error("TheClawBay direct image generation failed");
 			}
 			onProgress?.(RETRY_PROGRESS_MESSAGE);
+			await waitForDirectImageRetry(getDirectImageRetryDelayMs(attempt), options?.signal);
 			continue;
 		}
 
+		const response = result.response;
 		await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 		if (response.ok) {
 			return readDirectImageGenerationResponse(await response.json());
@@ -181,6 +191,7 @@ async function fetchDirectImageGeneration(
 			throw lastError;
 		}
 		onProgress?.(RETRY_PROGRESS_MESSAGE);
+		await waitForDirectImageRetry(getDirectImageRetryDelayMs(attempt, response.headers), options?.signal);
 	}
 
 	throw lastError instanceof Error ? lastError : new Error("TheClawBay direct image generation failed");
@@ -190,17 +201,80 @@ async function trySendDirectImageRequest(
 	apiKey: string,
 	body: unknown,
 	options?: SimpleStreamOptions
-): Promise<Response | Error> {
+): Promise<DirectImageRequestResult> {
+	const timeoutMs = resolveDirectImageTimeoutMs(options?.timeoutMs);
+	const timeoutSignal = AbortSignal.timeout(timeoutMs);
+	const signal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 	try {
-		return await fetch(THECLAWBAY_IMAGES_GENERATIONS_URL, {
+		const response = await fetch(THECLAWBAY_IMAGES_GENERATIONS_URL, {
 			method: "POST",
 			headers: buildDirectRequestHeaders(apiKey, options),
 			body: JSON.stringify(body),
-			signal: options?.signal,
+			signal,
 		});
+		return { response };
 	} catch (error) {
-		return error instanceof Error ? error : new Error(String(error));
+		if (options?.signal?.aborted) {
+			return { error: new Error("Request was aborted") };
+		}
+		if (timeoutSignal.aborted) {
+			return { error: new Error(`TheClawBay image generation timed out after ${timeoutMs}ms`) };
+		}
+		return { error: error instanceof Error ? error : new Error(String(error)) };
 	}
+}
+
+function resolveDirectImageTimeoutMs(requestedTimeoutMs: number | undefined): number {
+	if (requestedTimeoutMs === undefined) {
+		return DEFAULT_DIRECT_IMAGE_TIMEOUT_MS;
+	}
+	if (!Number.isFinite(requestedTimeoutMs) || requestedTimeoutMs <= 0) {
+		return DEFAULT_DIRECT_IMAGE_TIMEOUT_MS;
+	}
+	return Math.floor(requestedTimeoutMs);
+}
+
+function getDirectImageRetryDelayMs(attempt: number, headers?: Headers): number {
+	const retryAfter = headers ? parseRetryAfterMs(headers.get("retry-after")) : undefined;
+	if (retryAfter !== undefined) {
+		return Math.min(retryAfter, DIRECT_IMAGE_RETRY_MAX_DELAY_MS);
+	}
+
+	const exponential = Math.min(DIRECT_IMAGE_RETRY_BASE_DELAY_MS * 2 ** attempt, DIRECT_IMAGE_RETRY_MAX_DELAY_MS);
+	return Math.floor(exponential * (0.75 + Math.random() * 0.5));
+}
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+	if (!value) {
+		return undefined;
+	}
+
+	const seconds = Number(value);
+	if (Number.isFinite(seconds)) {
+		return Math.max(0, seconds * 1000);
+	}
+
+	const date = Date.parse(value);
+	return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+}
+
+function waitForDirectImageRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(new Error("Request was aborted"));
+			return;
+		}
+
+		const timeout = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, delayMs);
+		const onAbort = (): void => {
+			clearTimeout(timeout);
+			reject(new Error("Request was aborted"));
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
 }
 
 function readDirectImageGenerationResponse(response: unknown): DirectImageGenerationResult {

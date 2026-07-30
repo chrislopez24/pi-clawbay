@@ -16,6 +16,12 @@ import { buildFallbackOpenAIModels, buildOpenAIModels, isClaudeModelId, normaliz
 import { registerProviders } from "./provider.js";
 import type { ClaudeModelListResponse, ModelCacheFile, OpenAIModelListResponse, TheClawBayModelMetadata } from "./types.js";
 
+let activeDiscovery: { apiKey: string; promise: Promise<TheClawBayModelMetadata[] | null> } | undefined;
+
+export function resetModelDiscoveryForTests(): void {
+	activeDiscovery = undefined;
+}
+
 export function getModelCachePath(): string {
 	const overrideDir = process.env.PI_CLAWBAY_CACHE_DIR?.trim();
 	if (overrideDir) {
@@ -38,6 +44,13 @@ export function readCachedModelIds(now = Date.now(), options?: { allowStale?: bo
 }
 
 export function readCachedModelMetadata(now = Date.now(), options?: { allowStale?: boolean }): TheClawBayModelMetadata[] | null {
+	return readCachedModelCatalog(now, options)?.models ?? null;
+}
+
+export function readCachedModelCatalog(
+	now = Date.now(),
+	options?: { allowStale?: boolean }
+): { models: TheClawBayModelMetadata[]; fetchedAt: number } | null {
 	try {
 		const cachePath = getModelCachePath();
 		if (!existsSync(cachePath)) {
@@ -51,7 +64,11 @@ export function readCachedModelMetadata(now = Date.now(), options?: { allowStale
 	}
 }
 
-function readValidCacheFile(cachePath: string, now: number, options?: { allowStale?: boolean }): TheClawBayModelMetadata[] | null {
+function readValidCacheFile(
+	cachePath: string,
+	now: number,
+	options?: { allowStale?: boolean }
+): { models: TheClawBayModelMetadata[]; fetchedAt: number } | null {
 	const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as ModelCacheFile;
 	if (!isSupportedCacheVersion(parsed.version) || typeof parsed.fetchedAt !== "string") {
 		return null;
@@ -68,7 +85,7 @@ function readValidCacheFile(cachePath: string, now: number, options?: { allowSta
 
 	const rawModels = extractCachedModelMetadata(parsed);
 	const models = normalizeOpenAIModelMetadata(rawModels, { includePinned: true });
-	return models.length > 0 ? models : null;
+	return models.length > 0 ? { models, fetchedAt } : null;
 }
 
 function isSupportedCacheVersion(version: unknown): boolean {
@@ -142,17 +159,56 @@ export async function fetchOpenAIModelIds(apiKey: string, signal?: AbortSignal):
 }
 
 export async function fetchOpenAIModelMetadata(apiKey: string, signal?: AbortSignal): Promise<TheClawBayModelMetadata[] | null> {
+	if (signal?.aborted) {
+		return null;
+	}
+
+	if (!activeDiscovery || activeDiscovery.apiKey !== apiKey) {
+		const promise = fetchOpenAIModelMetadataWithRetry(apiKey).finally(() => {
+			if (activeDiscovery?.promise === promise) {
+				activeDiscovery = undefined;
+			}
+		});
+		activeDiscovery = { apiKey, promise };
+	}
+
+	return waitForDiscovery(activeDiscovery.promise, signal);
+}
+
+async function fetchOpenAIModelMetadataWithRetry(apiKey: string): Promise<TheClawBayModelMetadata[] | null> {
 	for (let attempt = 1; attempt <= MODEL_DISCOVERY_MAX_ATTEMPTS; attempt += 1) {
-		const metadata = await fetchCompleteOpenAIModelMetadata(apiKey, signal);
+		const metadata = await fetchCompleteOpenAIModelMetadata(apiKey);
 		if (metadata) {
 			return metadata;
 		}
-		if (attempt < MODEL_DISCOVERY_MAX_ATTEMPTS && !signal?.aborted) {
+		if (attempt < MODEL_DISCOVERY_MAX_ATTEMPTS) {
 			await waitForDiscoveryRetry();
 		}
 	}
 
 	return null;
+}
+
+function waitForDiscovery<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T | null> {
+	if (!signal) {
+		return promise;
+	}
+	if (signal.aborted) {
+		return Promise.resolve(null);
+	}
+
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const finish = (value: T | null): void => {
+			if (settled) return;
+			settled = true;
+			signal.removeEventListener("abort", onAbort);
+			resolve(value);
+		};
+		const onAbort = (): void => finish(null);
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(finish, reject);
+	});
 }
 
 function waitForDiscoveryRetry(): Promise<void> {
@@ -314,12 +370,16 @@ export function registerModelRefreshCommand(pi: ExtensionAPI, getApiKey: () => s
 	});
 }
 
-export async function resolveStartupProviderModels(apiKey?: string): Promise<{ models: ProviderModelConfig[]; source: "live" | "fallback" | "cache" }> {
+export async function resolveStartupProviderModels(
+	apiKey?: string,
+	currentModels?: ProviderModelConfig[]
+): Promise<{ models: ProviderModelConfig[]; source: "live" | "unchanged" | "fallback" | "cache" }> {
 	if (apiKey) {
 		const liveMetadata = await fetchOpenAIModelMetadata(apiKey);
 		if (liveMetadata) {
 			writeCachedModelMetadata(liveMetadata);
-			return { models: buildOpenAIModels(liveMetadata), source: "live" };
+			const models = buildOpenAIModels(liveMetadata);
+			return { models, source: currentModels && catalogsMatch(currentModels, models) ? "unchanged" : "live" };
 		}
 	}
 
@@ -329,4 +389,8 @@ export async function resolveStartupProviderModels(apiKey?: string): Promise<{ m
 	}
 
 	return { models: buildFallbackOpenAIModels(), source: "fallback" };
+}
+
+function catalogsMatch(left: ProviderModelConfig[], right: ProviderModelConfig[]): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
 }

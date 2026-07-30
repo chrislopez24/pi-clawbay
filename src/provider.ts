@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { RefreshModelsContext } from "@earendil-works/pi-ai";
 import { streamSimpleTheClawBayAnthropicMessages } from "./anthropic-transport.js";
-import { THECLAWBAY_ANTHROPIC_API, THECLAWBAY_CODEX_API, THECLAWBAY_CODEX_BASE_URL } from "./constants.js";
+import { THECLAWBAY_ANTHROPIC_API, THECLAWBAY_CODEX_API, THECLAWBAY_CODEX_BASE_URL, MODEL_CACHE_TTL_MS } from "./constants.js";
 import { streamSimpleTheClawBayCodexResponses } from "./transport.js";
 import { fetchOpenAIModelMetadata, writeCachedModelMetadata } from "./model-cache.js";
 import { buildOpenAIModels } from "./models.js";
@@ -19,6 +19,9 @@ async function refreshModels(
 	const apiKey = getCredentialKey(context);
 	if (!apiKey || !context.allowNetwork || context.signal?.aborted) {
 		return storedModels?.length ? storedModels : initialModels;
+	}
+	if (!context.force && storedModels?.length && stored?.checkedAt && Date.now() - stored.checkedAt <= MODEL_CACHE_TTL_MS) {
+		return storedModels;
 	}
 
 	const metadata = await fetchOpenAIModelMetadata(apiKey, context.signal);
